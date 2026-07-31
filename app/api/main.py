@@ -45,10 +45,11 @@ UPLOAD_DIR = "data/resumes"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
+import mcp
+
 @app.get("/")
 def health_check():
-    """Simple health check - confirms the server is running."""
-    return {"status": "ok", "message": "ResumeMatch API is running"}
+    return {"status": "ok", "mcp_version": mcp.__version__}
 
 
 @app.post("/upload-resume")
@@ -97,7 +98,7 @@ async def search_jobs(title: str, location: str = "", results: int = 10):
     """
     try:
         server_params = StdioServerParameters(
-            command="python",
+            command=sys.executable,
             args=["app/mcp_servers/job_search_server.py"],
         )
 
@@ -110,7 +111,7 @@ async def search_jobs(title: str, location: str = "", results: int = 10):
                 )
                 jobs = [json.loads(block.text) for block in result.content]
 
-        ats_params = ATSServerParameters(command="python", args=["app/mcp_servers/ats_tracker_server.py"])
+        ats_params = ATSServerParameters(command=sys.executable, args=["app/mcp_servers/ats_tracker_server.py"])
         async with ats_stdio_client(ats_params) as (read2, write2):
             async with ATSClientSession(read2, write2) as session2:
                 await session2.initialize()
@@ -216,7 +217,7 @@ async def get_history():
     """
     try:
         server_params = ATSServerParameters(
-            command="python",
+            command=sys.executable,
             args=["app/mcp_servers/ats_tracker_server.py"],
         )
 
@@ -234,7 +235,7 @@ async def get_history():
 async def get_search_history():
     """Retrieves the full search history from the ATS tracker MCP server."""
     try:
-        server_params = ATSServerParameters(command="python", args=["app/mcp_servers/ats_tracker_server.py"])
+        server_params = ATSServerParameters(command=sys.executable, args=["app/mcp_servers/ats_tracker_server.py"])
         async with ats_stdio_client(server_params) as (read, write):
             async with ATSClientSession(read, write) as session:
                 await session.initialize()
