@@ -1,0 +1,35 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+:root {
+    --bg: #0B0C0E;
+    --surface: #131519;
+    --border: #232629;
+    --text: #F2F1ED;
+    --muted: #8B8F94;
+    --accept: #39FF88;
+    --flag: #FF5C5C;
+    --accent: #FFB454;
+}
+
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+}
+
+.font-display {
+    font-family: 'Space Grotesk', sans-serif;
+}
+
+.font-mono {
+    font-family: 'IBM Plex Mono', monospace;
+}
+
+.glow-btn {
+    transition: box-shadow 0.2s ease, transform 0.1s ease;
+}
+
+.glow-btn:hover {
+    box-shadow: 0 0 20px var(--glow-color, var(--accept));
+    transform: translateY(-1px);
+}

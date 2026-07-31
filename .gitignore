@@ -1,0 +1,10 @@
+venv/
+.env
+__pycache__/
+*.pyc
+chroma_db/
+ats.db
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+data/resumes/*.pdf
