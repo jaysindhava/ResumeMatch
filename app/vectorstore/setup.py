@@ -10,8 +10,17 @@ from sentence_transformers import SentenceTransformer
 _client = chromadb.PersistentClient(path="./chroma_db")
 
 # Loaded once and reused everywhere (loading it repeatedly is slow)
-_embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+_embedding_model = None
 
+def _get_embedding_model():
+    """Lazily loads the embedding model on first actual use, instead of
+    blocking at import time - this lets FastAPI bind to its port
+    immediately on startup, rather than waiting for a slow model download
+    on platforms like Render's free tier."""
+    global _embedding_model
+    if _embedding_model is None:
+        _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+    return _embedding_model
 
 def get_resume_collection():
     """Single collection for all resume chunks, across all section types."""
@@ -31,9 +40,9 @@ def get_job_collection():
 
 def embed_text(text: str) -> list[float]:
     """Turn a piece of text into a vector using the local embedding model."""
-    vector = _embedding_model.encode(text)
+    model = _get_embedding_model()
+    vector = model.encode(text)
     return vector.tolist()
-
 
 def embed_and_store(chunks: list[dict], collection):
     """
