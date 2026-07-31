@@ -24,7 +24,7 @@ nltk
 pypdf
 python-docx
 
-mcp
+mcp == 1.28.1
 groq
 google-genai
 requests
