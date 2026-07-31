@@ -15,10 +15,6 @@ langchain-groq
 langgraph
 langsmith
 
-llama-index
-llama-index-core
-llama-index-embeddings-huggingface
-llama-index-vector-stores-chroma
 
 chromadb
 sentence-transformers
