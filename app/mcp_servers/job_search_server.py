@@ -37,6 +37,7 @@ def search_jobs(title: str, location: str = "", results: int = 10, country: str 
     }
 
     response = requests.get(url, params=params)
+    print(f"DEBUG: Adzuna response status={response.status_code}, body={response.text[:300]}")
     response.raise_for_status()
     data = response.json()
 

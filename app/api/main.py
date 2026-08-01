@@ -108,7 +108,14 @@ async def search_jobs(title: str, location: str = "", results: int = 10):
                     "search_jobs",
                     arguments={"title": title, "location": location, "results": results},
                 )
-                jobs = [json.loads(block.text) for block in result.content]
+                jobs = []
+                for block in result.content:
+                    if not block.text or not block.text.strip():
+                        continue  # skip empty content blocks instead of crashing
+                    try:
+                        jobs.append(json.loads(block.text))
+                    except json.JSONDecodeError:
+                        continue  # skip any block that isn't valid JSON, rather than failing the whole request
 
         ats_params = ATSServerParameters(command=sys.executable, args=["app/mcp_servers/ats_tracker_server.py"])
         async with ats_stdio_client(ats_params) as (read2, write2):
