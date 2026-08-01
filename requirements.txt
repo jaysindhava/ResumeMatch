@@ -19,7 +19,7 @@ langsmith
 chromadb
 sentence-transformers
 rank-bm25
-nltk
+snowballstemmer
 
 pypdf
 python-docx

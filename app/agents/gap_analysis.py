@@ -6,14 +6,12 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from rank_bm25 import BM25Okapi
 from pydantic import BaseModel, Field
-import nltk
-from nltk.stem import PorterStemmer
+from snowballstemmer import stemmer as snowball_stemmer
 
 from app.vectorstore.setup import get_resume_collection, embed_text
 from app.agents.llm_config import extraction_llm as gap_llm
 
-nltk.download("punkt", quiet=True)
-stemmer = PorterStemmer()
+_stemmer = snowball_stemmer("english")
 
 
 def get_all_resume_chunks() -> dict:
@@ -50,7 +48,7 @@ def tokenize(text: str) -> list[str]:
     improved retrieval hit-rate@1 from 50% to 75% in evaluation (see Phase 9).
     """
     words = re.findall(r"[a-z0-9]+", text.lower())
-    return [stemmer.stem(w) for w in words]
+    return _stemmer.stemWords(words)
 
 
 def build_bm25_index(documents: list[str]) -> BM25Okapi:
