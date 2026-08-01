@@ -45,11 +45,10 @@ UPLOAD_DIR = "data/resumes"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
-import mcp
-
 @app.get("/")
 def health_check():
-    return {"status": "ok", "mcp_version": mcp.__version__}
+    """Simple health check - confirms the server is running."""
+    return {"status": "ok", "message": "ResumeMatch API is running"}
 
 
 @app.post("/upload-resume")
