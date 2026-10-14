@@ -3,7 +3,9 @@ import os
 from datetime import datetime
 from mcp.server.fastmcp import FastMCP
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "ats.db")
+# In production (ECS + EFS), set ATS_DB_PATH to point to the EFS mount.
+# Defaults to a sibling file next to this script for local dev.
+DB_PATH = os.getenv("ATS_DB_PATH", os.path.join(os.path.dirname(__file__), "ats.db"))
 
 mcp = FastMCP("ats-tracker-mcp")
 
@@ -15,29 +17,17 @@ def get_connection():
 
 
 def init_db():
-    """Create the applications and search_history tables if they don't exist."""
     conn = get_connection()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS applications (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            job_id TEXT NOT NULL,
-            job_title TEXT,
-            company TEXT,
-            tailored_resume_summary TEXT,
-            status TEXT DEFAULT 'tailored',
-            created_at TEXT,
-            updated_at TEXT
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS search_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            search_title TEXT,
-            search_location TEXT,
-            results_count INTEGER,
-            created_at TEXT
-        )
-    """)
+    conn.execute("""CREATE TABLE IF NOT EXISTS applications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, job_title TEXT, company TEXT,
+        tailored_resume_summary TEXT, status TEXT DEFAULT 'tailored', created_at TEXT, updated_at TEXT)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS search_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, search_title TEXT, search_location TEXT,
+        results_count INTEGER, created_at TEXT)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS job_views (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, search_id INTEGER, job_title TEXT, company TEXT,
+        job_id TEXT, created_at TEXT,
+        UNIQUE(search_id, job_id))""")
     conn.commit()
     conn.close()
 
@@ -153,6 +143,30 @@ def get_search_history() -> list[dict]:
     """Retrieve all past searches, most recent first."""
     conn = get_connection()
     rows = conn.execute("SELECT * FROM search_history ORDER BY created_at DESC").fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+@mcp.tool()
+def log_job_view(search_id: int, job_id: str, job_title: str, company: str) -> dict:
+    """Records that a specific job was opened/analyzed from a specific search.
+    Uses INSERT OR IGNORE with a UNIQUE(search_id, job_id) constraint so this
+    is safe even under a race condition (e.g. React StrictMode firing the
+    same effect twice almost simultaneously in development)."""
+    conn = get_connection()
+    now = datetime.utcnow().isoformat()
+    conn.execute(
+        "INSERT OR IGNORE INTO job_views (search_id, job_title, company, job_id, created_at) VALUES (?, ?, ?, ?, ?)",
+        (search_id, job_title, company, job_id, now),
+    )
+    conn.commit()
+    conn.close()
+    return {"search_id": search_id, "job_id": job_id, "job_title": job_title}
+
+@mcp.tool()
+def get_job_views_for_search(search_id: int) -> list[dict]:
+    """Returns all jobs viewed/analyzed under a given search."""
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM job_views WHERE search_id = ?", (search_id,)).fetchall()
     conn.close()
     return [dict(row) for row in rows]
 

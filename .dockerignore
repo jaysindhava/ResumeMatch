@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+*.whl
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Local data (goes to S3 / EFS in production)
+chroma_db/
+data/
+
+# Secrets
+.env
+.env.*
+*.env
+
+# Git
+.git/
+.gitignore
+
+# Tests & dev tools
+tests/
+test_*.py
+*.test.*
+.pytest_cache/
+
+# Frontend (deployed separately to Vercel)
+frontend/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docs & config for other platforms
+render.yaml
+README.md
+*.md
+
+# CI
+.github/

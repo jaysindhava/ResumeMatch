@@ -3,11 +3,15 @@ os.environ["HF_HUB_OFFLINE"] = "1"  # skip HF Hub connectivity checks, use local
 
 import chromadb
 from sentence_transformers import SentenceTransformer
-import chromadb
-from sentence_transformers import SentenceTransformer
 
-# Persistent client -> data survives between script runs (stored in ./chroma_db)
-_client = chromadb.PersistentClient(path="./chroma_db")
+# ── ChromaDB path ──────────────────────────────────────────────────────────────
+# In production (ECS + EFS) set CHROMA_DB_PATH to the EFS mount path.
+# Locally defaults to ./chroma_db (relative to CWD, i.e. project root).
+_CHROMA_PATH = os.getenv("CHROMA_DB_PATH", "./chroma_db")
+os.makedirs(_CHROMA_PATH, exist_ok=True)
+
+# Persistent client -> data survives between restarts (backed by EFS in prod)
+_client = chromadb.PersistentClient(path=_CHROMA_PATH)
 
 # Loaded once and reused everywhere (loading it repeatedly is slow)
 _embedding_model = None
