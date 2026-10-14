@@ -1,9 +1,37 @@
 services:
   - type: web
     name: resumematch-backend
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m uvicorn app.api.main:app --host 0.0.0.0 --port $PORT
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.9
+      # ChromaDB + ATS SQLite use ephemeral storage on free plan
+      # Upgrade to Starter plan + add disk for persistence
+      - key: CHROMA_DB_PATH
+        value: /tmp/chroma_db
+      - key: ATS_DB_PATH
+        value: /tmp/ats.db
+      # API keys — set these in the Render dashboard Environment tab
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GOOGLE_API_KEY_2
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_API_KEY_2
+        sync: false
+      - key: LANGCHAIN_API_KEY
+        sync: false
+      - key: LANGCHAIN_TRACING_V2
+        value: "true"
+      - key: LANGCHAIN_PROJECT
+        value: resumematch
+      - key: ADZUNA_APP_ID
+        sync: false
+      - key: ADZUNA_APP_KEY
+        sync: false
+      # CORS — set this to your Vercel URL after deploying frontend
+      - key: FRONTEND_URL
+        sync: false
+
