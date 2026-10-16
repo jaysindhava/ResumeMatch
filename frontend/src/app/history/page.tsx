@@ -1,10 +1,11 @@
 "use client";
 
-import { API_URL } from "@/lib/api";
 import { useState, useEffect } from "react";
+import { API_URL } from "@/lib/api";
 
 interface Application { id: number; job_title: string; company: string; tailored_resume_summary: string; status: string; created_at: string; }
-interface SearchRecord { id: number; search_title: string; search_location: string; results_count: number; created_at: string; }
+interface ViewedJob { id: number; job_id: string; job_title: string; company: string; created_at: string; }
+interface SearchRecord { id: number; search_title: string; search_location: string; results_count: number; created_at: string; viewed_jobs: ViewedJob[]; }
 
 export default function HistoryPage() {
   const [applications, setApplications] = useState<Application[]>([]);
@@ -14,7 +15,7 @@ export default function HistoryPage() {
   useEffect(() => {
     Promise.all([
       fetch(`${API_URL}/history`).then((r) => r.json()),
-      fetch(`${API_URL}/search-history`).then((r) => r.json()),
+      fetch(`${API_URL}/search-history-detailed`).then((r) => r.json()),
     ]).then(([a, s]) => { setApplications(a.history); setSearches(s.history); })
       .catch(() => {}).finally(() => setLoading(false));
   }, []);
@@ -34,7 +35,7 @@ export default function HistoryPage() {
         <>
           <section>
             <h2 className="font-display text-xl font-semibold mb-4">Applications</h2>
-            {applications.length === 0 && <p className="text-sm" style={{ color: "var(--muted)" }}>None yet.</p>}
+            {applications.length === 0 && <p className="text-sm" style={{ color: "var(--muted)" }}>None yet — apply to a job from its analysis page.</p>}
             <div className="space-y-2">
               {applications.map((a) => (
                 <div key={a.id} className="rounded-lg p-4 flex justify-between items-start" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
@@ -52,14 +53,27 @@ export default function HistoryPage() {
           <section>
             <h2 className="font-display text-xl font-semibold mb-4">Searches</h2>
             {searches.length === 0 && <p className="text-sm" style={{ color: "var(--muted)" }}>None yet.</p>}
-            <div className="space-y-2">
+            <div className="space-y-3">
               {searches.map((s) => (
-                <div key={s.id} className="rounded-lg p-3 flex justify-between items-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-                  <div>
-                    <span className="text-sm">{s.search_title} in {s.search_location || "any location"}</span>
-                    <span className="font-mono text-xs ml-2" style={{ color: "var(--muted)" }}>{fmt(s.created_at)}</span>
+                <div key={s.id} className="rounded-lg p-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <span className="text-sm">{s.search_title} in {s.search_location || "any location"}</span>
+                      <span className="font-mono text-xs ml-2" style={{ color: "var(--muted)" }}>{fmt(s.created_at)}</span>
+                    </div>
+                    <span className="font-mono text-xs" style={{ color: "var(--accent)" }}>{s.results_count} results</span>
                   </div>
-                  <span className="font-mono text-xs" style={{ color: "var(--accent)" }}>{s.results_count} results</span>
+
+                  {s.viewed_jobs.length > 0 && (
+                    <div className="mt-3 pl-4 border-l" style={{ borderColor: "var(--border)" }}>
+                      <p className="font-mono text-xs uppercase tracking-wider mb-2" style={{ color: "var(--muted)" }}>Jobs viewed from this search</p>
+                      {s.viewed_jobs.map((v) => (
+                        <p key={v.id} className="text-sm py-1" style={{ color: "var(--text)" }}>
+                          {v.job_title} — <span style={{ color: "var(--muted)" }}>{v.company}</span>
+                        </p>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

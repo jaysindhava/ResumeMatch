@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 # =============================================================================
-# test-aws-deployment.ps1  —  End-to-end verification of the AWS deployment
+# test-aws-deployment.ps1  -  End-to-end verification of the AWS deployment
 #
 # Usage:  .\test-aws-deployment.ps1 -ApiUrl "http://<public-ip>:8000"
 # =============================================================================
@@ -25,12 +25,12 @@ $results = @{ Pass = 0; Fail = 0 }
 function Check {
     param([bool]$ok, [string]$label, [string]$detail = "")
     if ($ok) { Pass $label; $results.Pass++ }
-    else      { Fail "$label — $detail"; $results.Fail++ }
+    else      { Fail "$label - $detail"; $results.Fail++ }
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-Log "1. Health Check — GET $ApiUrl/"
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+Log "1. Health Check - GET $ApiUrl/"
+# -----------------------------------------------------------------------------
 try {
     $r = Invoke-RestMethod -Uri "$ApiUrl/" -Method GET -TimeoutSec 30
     Check ($r.status -eq "ok") "Health check returns {status: ok}" "Got: $($r | ConvertTo-Json -Compress)"
@@ -38,19 +38,19 @@ try {
     Check $false "Health check reachable" "Error: $_"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-Log "2. Swagger Docs — GET $ApiUrl/docs"
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+Log "2. Swagger Docs - GET $ApiUrl/docs"
+# -----------------------------------------------------------------------------
 try {
-    $r = Invoke-WebRequest -Uri "$ApiUrl/docs" -TimeoutSec 15
+    $r = Invoke-WebRequest -Uri "$ApiUrl/docs" -UseBasicParsing -TimeoutSec 15
     Check ($r.StatusCode -eq 200) "Swagger docs accessible" "HTTP $($r.StatusCode)"
 } catch {
     Check $false "Swagger docs accessible" "Error: $_"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-Log "3. SSM Parameter Store — secrets exist"
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+Log "3. SSM Parameter Store - secrets exist"
+# -----------------------------------------------------------------------------
 $secretKeys = @("GOOGLE_API_KEY","GROQ_API_KEY","LANGCHAIN_API_KEY","ADZUNA_APP_ID","ADZUNA_APP_KEY")
 foreach ($key in $secretKeys) {
     try {
@@ -61,9 +61,9 @@ foreach ($key in $secretKeys) {
     }
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-Log "4. S3 Bucket — accessible"
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+Log "4. S3 Bucket - accessible"
+# -----------------------------------------------------------------------------
 $AccountId = & $AWS sts get-caller-identity --query "Account" --output text
 $S3Bucket  = "$AppName-resumes-$AccountId"
 try {
@@ -73,9 +73,9 @@ try {
     Check $false "S3 bucket accessible" "$_"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-Log "5. ECR — image exists"
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+Log "5. ECR - image exists"
+# -----------------------------------------------------------------------------
 try {
     $images = & $AWS ecr list-images --repository-name "$AppName-backend" --region $Region --query "imageIds" --output json | ConvertFrom-Json
     Check ($images.Count -gt 0) "ECR image present ($($images.Count) tag(s))"
@@ -83,9 +83,9 @@ try {
     Check $false "ECR image check" "$_"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-Log "6. ECS Service — RUNNING task"
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+Log "6. ECS Service - RUNNING task"
+# -----------------------------------------------------------------------------
 try {
     $svc = & $AWS ecs describe-services `
         --cluster "$AppName-cluster" `
@@ -99,9 +99,9 @@ try {
     Check $false "ECS service check" "$_"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-Log "7. Job Search endpoint — GET $ApiUrl/search-jobs?title=Software+Engineer"
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+Log "7. Job Search endpoint - GET $ApiUrl/search-jobs?title=Software+Engineer"
+# -----------------------------------------------------------------------------
 try {
     $r = Invoke-RestMethod -Uri "$ApiUrl/search-jobs?title=Software+Engineer&results=3" -Method GET -TimeoutSec 60
     Check ($r.status -eq "success") "Job search returns results" "Count: $($r.count)"
@@ -110,9 +110,9 @@ try {
     Check $false "Job search endpoint" "Error: $_"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-Log "8. Resume Upload endpoint — POST $ApiUrl/upload-resume"
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+Log "8. Resume Upload endpoint - POST $ApiUrl/upload-resume"
+# -----------------------------------------------------------------------------
 # Create a tiny valid-enough PDF for testing
 $miniPdf = [byte[]]@(
     0x25,0x50,0x44,0x46,0x2D,0x31,0x2E,0x34,0x0A,
@@ -123,21 +123,18 @@ $tmpPdf = Join-Path $env:TEMP "test_resume.pdf"
 [System.IO.File]::WriteAllBytes($tmpPdf, $miniPdf)
 
 try {
-    # multipart/form-data upload
-    $form = @{ file = Get-Item $tmpPdf }
-    $r = Invoke-RestMethod -Uri "$ApiUrl/upload-resume" -Method POST -Form $form -TimeoutSec 60
-    # A minimal PDF won't parse successfully but the endpoint should respond
-    Check ($null -ne $r) "Upload-resume endpoint reachable" "Response: $($r | ConvertTo-Json -Compress)"
+    # Use curl.exe for cross-version multipart/form-data support
+    $curlOut = & curl.exe -s -X POST "$ApiUrl/upload-resume" -F "file=@$tmpPdf;filename=test_resume.pdf;type=application/pdf"
+    # A minimal dummy PDF is expected to be processed or fail parsing gracefully
+    $acceptable = $curlOut -match "Failed to process resume" -or $curlOut -match "status" -or $curlOut -match "detail"
+    Check $acceptable "Upload-resume endpoint reachable and functional" "Output: $curlOut"
 } catch {
-    $errMsg = $_.Exception.Message
-    # A 500 "Failed to process resume" with a tiny test PDF is expected and acceptable
-    $acceptable = $errMsg -match "Failed to process resume" -or $errMsg -match "500"
-    Check $acceptable "Upload-resume endpoint reachable (expected parse error on dummy PDF)" "Error: $errMsg"
+    Check $false "Upload-resume endpoint" "$_"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-Log "9. CloudWatch Logs — log group exists"
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+Log "9. CloudWatch Logs - log group exists"
+# -----------------------------------------------------------------------------
 try {
     $lg = & $AWS logs describe-log-groups `
         --log-group-name-prefix "/ecs/$AppName-backend" `
@@ -149,9 +146,9 @@ try {
     Check $false "CloudWatch log group" "$_"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # SUMMARY
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor White
 Write-Host "  Test Results: $($results.Pass) passed, $($results.Fail) failed" -ForegroundColor $(if ($results.Fail -eq 0) { "Green" } else { "Red" })

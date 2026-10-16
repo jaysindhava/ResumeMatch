@@ -222,6 +222,34 @@ async def rank_all_jobs_async(preferred_locations: list[str], top_n_prefilter: i
     return scored_jobs
 
 
+async def rank_job_list_async(jobs_list: list[dict], preferred_locations: list[str], max_concurrent: int = 3) -> list[JobScore]:
+    """
+    Same two-stage scoring as rank_all_jobs_async, but operates on a
+    caller-provided list of jobs (e.g. fresh search results) instead of
+    pulling from the old, frozen Phase 4 ingested batch in Chroma.
+    """
+    jobs = {job["job_id"]: job for job in jobs_list}
+    resume_text = get_full_resume_text()
+
+    top_candidates = prefilter_jobs_by_similarity(jobs, resume_text, top_n=len(jobs))
+
+    semaphore = asyncio.Semaphore(max_concurrent)
+    tasks = [
+        score_one_job(job_id, job, prefilter_score, preferred_locations, semaphore)
+        for prefilter_score, job_id, job in top_candidates
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    scored_jobs = []
+    for (prefilter_score, job_id, job), result in zip(top_candidates, results):
+        if isinstance(result, Exception) or result is None:
+            continue
+        scored_jobs.append(result)
+
+    scored_jobs.sort(key=lambda x: x.final_score, reverse=True)
+    return scored_jobs
+
+
 if __name__ == "__main__":
     import time
 

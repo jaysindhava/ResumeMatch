@@ -1,8 +1,8 @@
 "use client";
 
-import { API_URL } from "@/lib/api";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { API_URL } from "@/lib/api";
 
 interface Job { job_id: string; title: string; company: string; location: string; description: string; url: string; posted_date: string; }
 interface RankedJob { job_id: string; title: string; company: string; location: string; url: string; final_score: number; skill_overlap: number; seniority_match: number; matched_skills: string[]; missing_skills: string[]; }
@@ -17,26 +17,49 @@ export default function JobsPage() {
   const [rankingsLoading, setRankingsLoading] = useState(false);
   const router = useRouter();
 
+  useEffect(() => {
+    const savedJobs = localStorage.getItem("lastSearchJobs");
+    const savedTitle = localStorage.getItem("lastSearchTitle");
+    const savedLocation = localStorage.getItem("lastSearchLocation");
+    if (savedJobs) setJobs(JSON.parse(savedJobs));
+    if (savedTitle) setTitle(savedTitle);
+    if (savedLocation) setLocation(savedLocation);
+  }, []);
+
   const handleSearch = async () => {
     setLoading(true); setError("");
     try {
       const params = new URLSearchParams({ title, location, results: "10" });
       const response = await fetch(`${API_URL}/search-jobs?${params}`);
       const data = await response.json();
-      if (response.ok) setJobs(data.jobs); else setError(data.detail || "Search failed");
+      if (response.ok) {
+        setJobs(data.jobs);
+        localStorage.setItem("lastSearchJobs", JSON.stringify(data.jobs));
+        localStorage.setItem("lastSearchTitle", title);
+        localStorage.setItem("lastSearchLocation", location);
+        localStorage.setItem("lastSearchId", String(data.search_id));
+      } else {
+        setError(data.detail || "Search failed");
+      }
     } catch { setError("Could not reach the backend."); }
     finally { setLoading(false); }
   };
 
   const handleAnalyze = (job: Job) => {
     localStorage.setItem("selectedJob", JSON.stringify(job));
+    localStorage.setItem("currentSearchId", localStorage.getItem("lastSearchId") || "");
     router.push(`/jobs/${job.job_id}`);
   };
 
   const handleGetRankings = async () => {
+    if (jobs.length === 0) return;
     setRankingsLoading(true);
     try {
-      const response = await fetch(`${API_URL}/rankings?top_n=8`);
+      const response = await fetch(`${API_URL}/rank-searched-jobs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobs }),
+      });
       const data = await response.json();
       if (response.ok) setRankings(data.rankings);
     } catch {} finally { setRankingsLoading(false); }
@@ -80,7 +103,7 @@ export default function JobsPage() {
       <div className="pt-8 border-t" style={{ borderColor: "var(--border)" }}>
         <div className="flex items-center justify-between mb-6">
           <h2 className="font-display text-2xl font-bold">Ranked matches</h2>
-          <button onClick={handleGetRankings} disabled={rankingsLoading}
+          <button onClick={handleGetRankings} disabled={rankingsLoading || jobs.length === 0}
             className="glow-btn px-4 py-2 rounded-md font-mono text-xs uppercase tracking-wider disabled:opacity-40"
             style={{ background: "var(--accept)", color: "#062412", ["--glow-color" as string]: "var(--accept)" }}>
             {rankingsLoading ? "Scoring..." : "Get top matches"}

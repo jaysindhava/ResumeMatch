@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 # =============================================================================
-# deploy-aws.ps1  —  Full AWS deployment script for ResumeMatch backend
+# deploy-aws.ps1  -  Full AWS deployment script for ResumeMatch backend
 #
 # Usage:
 #   .\deploy-aws.ps1 -AccountId "123456789012" -Region "ap-south-1"
@@ -18,20 +18,22 @@ param(
     [string]$Region      = "ap-south-1",
     [string]$AppName     = "resumematch",
     [string]$ClusterName = "resumematch-cluster",
-    [string]$ServiceName = "resumematch-backend"
+    [string]$ServiceName = "resumematch-backend",
+    [string]$FrontendUrl = ""
 )
 
 $AWS = "C:\Program Files\Amazon\AWSCLIV2\aws.exe"
-$ECR_URI = "$AccountId.dkr.ecr.$Region.amazonaws.com/$AppName-backend"
+$ECR_REGISTRY = "$($AccountId).dkr.ecr.$($Region).amazonaws.com"
+$ECR_URI = "$ECR_REGISTRY/$AppName-backend"
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 function Log { param([string]$msg) Write-Host "`n[$(Get-Date -f 'HH:mm:ss')] $msg" -ForegroundColor Cyan }
-function Ok  { param([string]$msg) Write-Host "  ✓ $msg" -ForegroundColor Green }
-function Err { param([string]$msg) Write-Host "  ✗ $msg" -ForegroundColor Red; exit 1 }
+function Ok  { param([string]$msg) Write-Host "  [OK] $msg" -ForegroundColor Green }
+function Err { param([string]$msg) Write-Host "  [ERROR] $msg" -ForegroundColor Red; exit 1 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 0 — Verify prerequisites
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# STEP 0 - Verify prerequisites
+# -----------------------------------------------------------------------------
 Log "Verifying prerequisites..."
 
 & $AWS sts get-caller-identity --output text 2>&1 | Out-Null
@@ -42,9 +44,9 @@ docker info 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) { Err "Docker is not running. Start Docker Desktop first." }
 Ok "Docker OK"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 1 — Read secrets from .env
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# STEP 1 - Read secrets from .env
+# -----------------------------------------------------------------------------
 Log "Reading secrets from .env..."
 $envFile = Join-Path $PSScriptRoot ".env"
 if (-not (Test-Path $envFile)) { Err ".env file not found at $envFile" }
@@ -60,9 +62,9 @@ Get-Content $envFile | Where-Object { $_ -match "^[^#].*=.*" } | ForEach-Object 
 }
 Ok "Loaded $($envVars.Count) env vars"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 2 — Create ECR repository
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# STEP 2 - Create ECR repository
+# -----------------------------------------------------------------------------
 Log "Creating ECR repository..."
 $repoCheck = & $AWS ecr describe-repositories --repository-names "$AppName-backend" --region $Region 2>&1
 if ($LASTEXITCODE -ne 0) {
@@ -76,9 +78,9 @@ if ($LASTEXITCODE -ne 0) {
     Ok "ECR repository already exists"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 3 — Store secrets in SSM Parameter Store
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# STEP 3 - Store secrets in SSM Parameter Store
+# -----------------------------------------------------------------------------
 Log "Storing secrets in SSM Parameter Store..."
 $secretKeys = @("GOOGLE_API_KEY","GOOGLE_API_KEY_2","GROQ_API_KEY","GROQ_API_KEY_2",
                 "LANGCHAIN_API_KEY","ADZUNA_APP_ID","ADZUNA_APP_KEY")
@@ -95,9 +97,9 @@ foreach ($key in $secretKeys) {
     }
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 4 — Create S3 bucket for resume uploads
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# STEP 4 - Create S3 bucket for resume uploads
+# -----------------------------------------------------------------------------
 Log "Creating S3 bucket..."
 $S3Bucket = "$AppName-resumes-$AccountId"
 $bucketCheck = & $AWS s3api head-bucket --bucket $S3Bucket --region $Region 2>&1
@@ -118,9 +120,9 @@ if ($LASTEXITCODE -ne 0) {
     Ok "S3 bucket already exists"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 5 — Build & push Docker image to ECR
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# STEP 5 - Build & push Docker image to ECR
+# -----------------------------------------------------------------------------
 Log "Building Docker image (this takes a few minutes for first build)..."
 docker build -t "$AppName-backend" .
 if ($LASTEXITCODE -ne 0) { Err "Docker build failed" }
@@ -128,19 +130,19 @@ Ok "Docker image built"
 
 Log "Authenticating Docker with ECR..."
 & $AWS ecr get-login-password --region $Region | `
-    docker login --username AWS --password-stdin "$AccountId.dkr.ecr.$Region.amazonaws.com"
+    docker login --username AWS --password-stdin "$ECR_REGISTRY"
 if ($LASTEXITCODE -ne 0) { Err "ECR login failed" }
 Ok "ECR login OK"
 
 Log "Tagging & pushing image to ECR..."
-docker tag "$AppName-backend:latest" "$ECR_URI:latest"
-docker push "$ECR_URI:latest"
+docker tag "${AppName}-backend:latest" "${ECR_URI}:latest"
+docker push "${ECR_URI}:latest"
 if ($LASTEXITCODE -ne 0) { Err "Docker push failed" }
-Ok "Image pushed to ECR: $ECR_URI:latest"
+Ok "Image pushed to ECR: ${ECR_URI}:latest"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 6 — Create ECS Cluster
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# STEP 6 - Create ECS Cluster
+# -----------------------------------------------------------------------------
 Log "Creating ECS cluster..."
 $clusterCheck = & $AWS ecs describe-clusters --clusters $ClusterName --region $Region --query "clusters[0].status" --output text 2>&1
 if ($clusterCheck -ne "ACTIVE") {
@@ -150,9 +152,9 @@ if ($clusterCheck -ne "ACTIVE") {
     Ok "ECS cluster already exists"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 7 — Ensure IAM role for ECS tasks
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# STEP 7 - Ensure IAM role for ECS tasks
+# -----------------------------------------------------------------------------
 Log "Setting up ECS task IAM role..."
 $roleName = "ecsTaskExecutionRole"
 $roleCheck = & $AWS iam get-role --role-name $roleName 2>&1
@@ -188,9 +190,9 @@ $ssmPolicyName = "resumematch-task-policy"
 & $AWS iam put-role-policy --role-name $roleName --policy-name $ssmPolicyName --policy-document $ssmPolicyDoc 2>&1 | Out-Null
 Ok "IAM inline policy for SSM + S3 attached"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 8 — Register ECS Task Definition
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# STEP 8 - Register ECS Task Definition
+# -----------------------------------------------------------------------------
 Log "Registering ECS task definition..."
 
 # Build secrets array for SSM parameters
@@ -206,16 +208,17 @@ foreach ($key in $secretKeys) {
 
 $envList = @(
     @{ name = "S3_BUCKET";        value = $S3Bucket },
-    @{ name = "CHROMA_DB_PATH";   value = "/mnt/efs/chroma_db" },
-    @{ name = "ATS_DB_PATH";      value = "/mnt/efs/ats.db" },
+    @{ name = "CHROMA_DB_PATH";   value = "/app/chroma_db" },
+    @{ name = "ATS_DB_PATH";      value = "/app/ats.db" },
     @{ name = "LANGCHAIN_TRACING_V2"; value = "true" },
     @{ name = "LANGCHAIN_PROJECT"; value = "resumematch" }
 )
 
-# Add FRONTEND_URL if known
-$frontendUrl = Read-Host "Enter your Vercel frontend URL (e.g. https://resumematch.vercel.app) — press Enter to skip"
-if ($frontendUrl) {
-    $envList += @{ name = "FRONTEND_URL"; value = $frontendUrl }
+# Add FRONTEND_URL if provided
+if ($FrontendUrl) {
+    $envList += @{ name = "FRONTEND_URL"; value = $FrontendUrl }
+} else {
+    $envList += @{ name = "FRONTEND_URL"; value = "*" }
 }
 
 $taskDef = @{
@@ -243,7 +246,7 @@ $taskDef = @{
             }
         }
         healthCheck = @{
-            command     = @("CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/')\" || exit 1")
+            command     = @("CMD-SHELL", 'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8000/'')" || exit 1')
             interval    = 30
             timeout     = 10
             retries     = 3
@@ -264,9 +267,9 @@ if ($LASTEXITCODE -ne 0) { Err "Task definition registration failed" }
 $taskDefArn = $registerResult.taskDefinition.taskDefinitionArn
 Ok "Task definition registered: $taskDefArn"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 9 — Get default VPC / subnets / security group
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# STEP 9 - Get default VPC / subnets / security group
+# -----------------------------------------------------------------------------
 Log "Getting VPC/subnet/security group..."
 $vpcId = & $AWS ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query "Vpcs[0].VpcId" --output text --region $Region
 $subnets = & $AWS ec2 describe-subnets --filters "Name=vpc-id,Values=$vpcId" --query "Subnets[*].SubnetId" --output text --region $Region
@@ -300,13 +303,13 @@ if ($sgId -eq "None" -or -not $sgId) {
     Ok "Security group already exists: $sgId"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 10 — Create or update ECS Service (without ALB for first test)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# STEP 10 - Create or update ECS Service (without ALB for first test)
+# -----------------------------------------------------------------------------
 Log "Creating ECS Fargate service..."
 $svcCheck = & $AWS ecs describe-services --cluster $ClusterName --services $ServiceName --region $Region --query "services[0].status" --output text 2>&1
 if ($svcCheck -eq "ACTIVE") {
-    Log "Service exists — forcing new deployment..."
+    Log "Service exists - forcing new deployment..."
     & $AWS ecs update-service `
         --cluster $ClusterName `
         --service $ServiceName `
@@ -316,22 +319,23 @@ if ($svcCheck -eq "ACTIVE") {
         --output json | Out-Null
     Ok "Service updated with new image"
 } else {
+    $netConfig = "awsvpcConfiguration={" + "subnets=[" + $subnetList + "],securityGroups=[" + $sgId + "],assignPublicIp=ENABLED}"
     & $AWS ecs create-service `
         --cluster $ClusterName `
         --service-name $ServiceName `
         --task-definition $taskDefArn `
         --desired-count 1 `
         --launch-type FARGATE `
-        --network-configuration "awsvpcConfiguration={subnets=[$subnetList],securityGroups=[$sgId],assignPublicIp=ENABLED}" `
+        --network-configuration "$netConfig" `
         --region $Region `
         --output json | Out-Null
     if ($LASTEXITCODE -ne 0) { Err "ECS service creation failed" }
     Ok "ECS service created: $ServiceName"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 11 — Wait for service to stabilize and get public IP
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# STEP 11 - Wait for service to stabilize and get public IP
+# -----------------------------------------------------------------------------
 Log "Waiting for task to reach RUNNING state (up to 3 min)..."
 $attempts = 0
 $taskPublicIp = $null
@@ -351,9 +355,9 @@ while ($attempts -lt 18) {
     $attempts++
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DONE — Print summary
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# DONE - Print summary
+# -----------------------------------------------------------------------------
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Green
 Write-Host "  ResumeMatch Backend Deployed!" -ForegroundColor Green
@@ -368,7 +372,7 @@ if ($taskPublicIp) {
     Write-Host "  aws ecs describe-services --cluster $ClusterName --services $ServiceName --region $Region" -ForegroundColor Yellow
 }
 Write-Host ""
-Write-Host "  ECR Image:   $ECR_URI:latest"
+Write-Host "  ECR Image:   ${ECR_URI}:latest"
 Write-Host "  S3 Bucket:   $S3Bucket"
 Write-Host "  ECS Cluster: $ClusterName"
 Write-Host ""
