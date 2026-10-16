@@ -1,6 +1,4 @@
 import os
-os.environ["HF_HUB_OFFLINE"] = "1"  # skip HF Hub connectivity checks, use local cache only
-
 import chromadb
 from sentence_transformers import SentenceTransformer
 
@@ -55,6 +53,8 @@ def embed_and_store(chunks: list[dict], collection):
     so this works for both resume chunks (section, context) and job chunks
     (section, job_id, title, company, location, url) without changes.
     """
+    if not chunks:
+        return
     ids = [chunk["id"] for chunk in chunks]
     documents = [chunk["text"] for chunk in chunks]
     embeddings = [embed_text(chunk["text"]) for chunk in chunks]

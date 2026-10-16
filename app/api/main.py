@@ -51,6 +51,7 @@ from mcp.client.stdio import stdio_client as ats_stdio_client
 from app.parsers.resume_parser import (
     extract_raw_text, split_into_sections, chunk_bullets,
     chunk_skills, chunk_education, chunk_certifications,
+    chunk_general_text,
 )
 from app.vectorstore.setup import get_resume_collection, embed_and_store
 from app.agents.ranking import extract_job_requirements_async, rank_all_jobs_async, rank_job_list_async
@@ -106,6 +107,12 @@ async def upload_resume(file: UploadFile = File(...)):
         all_chunks += chunk_skills(sections.get("skills", ""))
         all_chunks += chunk_education(sections.get("education", ""))
         all_chunks += chunk_certifications(sections.get("certifications", ""))
+        if "summary" in sections:
+            all_chunks += chunk_general_text(sections["summary"], "summary")
+
+        # If standard sections were not identified or yielded no chunks, use general chunking
+        if not all_chunks:
+            all_chunks = chunk_general_text(text, "general")
 
         collection = get_resume_collection()
         embed_and_store(all_chunks, collection)

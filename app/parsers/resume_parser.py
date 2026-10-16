@@ -14,12 +14,13 @@ def extract_raw_text(pdf_path: str) -> str:
 # Maps a canonical section name to every known real-world wording variant
 # we've encountered. Add more aliases here as new resume formats surface.
 SECTION_HEADER_ALIASES = {
-    "professional_experience": ["Professional Experience", "Work Experience", "Experience"],
-    "projects": ["Projects", "Key Projects", "Personal Projects"],
-    "education": ["Education"],
-    "certifications": ["Certifications", "Certificates"],
-    "skills": ["Skills", "Technical Skills"],
-    "extracurriculars": ["Extracurriculars", "Extra-Curricular Activities", "Extracurricular Activities"],
+    "professional_experience": ["Professional Experience", "Work Experience", "Experience", "Work History", "Employment History"],
+    "projects": ["Projects", "Key Projects", "Personal Projects", "Academic Projects"],
+    "education": ["Education", "Academic Background", "Academics", "Qualifications"],
+    "certifications": ["Certifications", "Certificates", "Licenses & Certifications"],
+    "skills": ["Skills", "Technical Skills", "Core Competencies", "Areas of Expertise"],
+    "summary": ["Professional Summary", "Summary", "Profile", "Executive Summary", "About Me"],
+    "extracurriculars": ["Extracurriculars", "Extra-Curricular Activities", "Extracurricular Activities", "Achievements", "Awards"],
 }
 
 
@@ -31,16 +32,28 @@ def _normalize_for_matching(text: str) -> str:
     return re.sub(r"\s+", "", text).lower()
 
 
+def _matches_alias(line: str, alias_lookup: dict) -> str:
+    """Check if a line matches any known section header alias."""
+    norm = _normalize_for_matching(line.strip())
+    if not norm:
+        return ""
+    if norm in alias_lookup:
+        return alias_lookup[norm]
+    # Prefix match for headers like "Skills (replace existing...)" or "Experience - Recent"
+    for alias_norm, canonical in alias_lookup.items():
+        if norm.startswith(alias_norm) and (len(norm) == len(alias_norm) or norm[len(alias_norm)] in "(: -_"):
+            return canonical
+    return ""
+
+
 def split_into_sections(text: str) -> dict:
     """
     Split raw resume text into a dict of {canonical_section_name: text}.
     Matches headers against a list of known aliases per section (not just
-    one exact string), and tolerates PDF-extraction spacing artifacts by
-    comparing whitespace-stripped, lowercased versions of each line.
+    one exact string), and tolerates PDF-extraction spacing artifacts.
     """
     lines = text.split("\n")
 
-    # Build a lookup: normalized alias text -> canonical section name
     alias_lookup = {}
     for canonical, aliases in SECTION_HEADER_ALIASES.items():
         for alias in aliases:
@@ -51,18 +64,17 @@ def split_into_sections(text: str) -> dict:
     current_lines = []
 
     for line in lines:
-        stripped = line.strip()
-        normalized = _normalize_for_matching(stripped)
-
-        if normalized in alias_lookup:
-            # Save whatever we've accumulated for the previous section
-            sections[current_section] = "\n".join(current_lines).strip()
-            current_section = alias_lookup[normalized]
+        matched = _matches_alias(line, alias_lookup)
+        if matched:
+            if current_lines:
+                sections[current_section] = "\n".join(current_lines).strip()
+            current_section = matched
             current_lines = []
         else:
             current_lines.append(line)
 
-    sections[current_section] = "\n".join(current_lines).strip()
+    if current_lines:
+        sections[current_section] = "\n".join(current_lines).strip()
     return sections
 
 # Matches date-range patterns like "Feb'26 - Apr'26" or "May '25 – July '25",
@@ -216,6 +228,51 @@ def chunk_certifications(section_text: str) -> list[dict]:
     """Certifications follow the same title+date+bullet structure as
     Experience/Projects, so we reuse chunk_bullets."""
     return chunk_bullets(section_text, "certifications")
+
+
+def chunk_general_text(text: str, section_name: str = "general") -> list[dict]:
+    """
+    Chunk unstructured or summary text by bullet points or coherent paragraphs.
+    Used for summary sections, unclassified blocks, or as a reliable fallback.
+    """
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    chunks = []
+    idx = 0
+    current_buf = []
+
+    for l in lines:
+        is_bullet = l.startswith(("•", "-", "*", "◦", "▪")) or (len(l) > 30 and l.endswith("."))
+        if is_bullet:
+            if current_buf:
+                idx += 1
+                chunks.append({
+                    "id": f"{section_name}_{idx:03d}",
+                    "section": section_name,
+                    "context": "",
+                    "text": " ".join(current_buf).strip(),
+                })
+                current_buf = []
+            idx += 1
+            clean_l = l.lstrip("•-*◦▪ ")
+            chunks.append({
+                "id": f"{section_name}_{idx:03d}",
+                "section": section_name,
+                "context": "",
+                "text": clean_l,
+            })
+        else:
+            current_buf.append(l)
+
+    if current_buf:
+        idx += 1
+        chunks.append({
+            "id": f"{section_name}_{idx:03d}",
+            "section": section_name,
+            "context": "",
+            "text": " ".join(current_buf).strip(),
+        })
+
+    return chunks
 
 
 if __name__ == "__main__":
