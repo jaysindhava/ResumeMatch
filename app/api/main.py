@@ -57,7 +57,52 @@ from app.vectorstore.setup import get_resume_collection, embed_and_store
 from app.agents.ranking import extract_job_requirements_async, rank_all_jobs_async, rank_job_list_async
 from app.agents.tailoring_graph import tailoring_app
 
+
+def ensure_resume_loaded() -> int:
+    """Check if ChromaDB has resume chunks; if not and S3 is configured,
+    auto-restore the most recently uploaded resume from S3."""
+    try:
+        collection = get_resume_collection()
+        count = collection.count()
+        if count > 0:
+            return count
+
+        if USE_S3 and _s3_client:
+            response = _s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix="resumes/")
+            contents = response.get("Contents", [])
+            pdf_objects = [obj for obj in contents if obj["Key"].endswith(".pdf") and obj.get("Size", 0) > 100]
+            if pdf_objects:
+                pdf_objects.sort(key=lambda x: x["LastModified"], reverse=True)
+                latest_key = pdf_objects[0]["Key"]
+                filename = os.path.basename(latest_key)
+                local_path = os.path.join(UPLOAD_DIR, filename)
+                print(f"Auto-restoring latest resume from S3: {latest_key} -> {local_path}")
+                _s3_client.download_file(S3_BUCKET, latest_key, local_path)
+
+                text = extract_raw_text(local_path)
+                sections = split_into_sections(text)
+                all_chunks = []
+                all_chunks += chunk_bullets(sections.get("experience", ""), "experience")
+                all_chunks += chunk_bullets(sections.get("projects", ""), "projects")
+                all_chunks += chunk_skills(sections.get("skills", ""))
+                all_chunks += chunk_education(sections.get("education", ""))
+                all_chunks += chunk_certifications(sections.get("certifications", ""))
+                if "summary" in sections:
+                    all_chunks += chunk_general_text(sections["summary"], "summary")
+                if not all_chunks:
+                    all_chunks = chunk_general_text(text, "general")
+
+                embed_and_store(all_chunks, collection)
+                print(f"Successfully auto-restored {len(all_chunks)} chunks for {filename}")
+                return len(all_chunks)
+    except Exception as e:
+        print(f"Warning: Failed to auto-restore resume from S3: {e}")
+
+    return 0
+
+
 app = FastAPI(title="ResumeMatch API")
+
 
 # CORS: allow localhost and all Vercel domains (*.vercel.app)
 _cors_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
@@ -92,8 +137,10 @@ JOB_SEARCH_SERVER_PARAMS = StdioServerParameters(
 
 @app.get("/")
 def health_check():
-    """Simple health check - confirms the server is running."""
-    return {"status": "ok", "message": "ResumeMatch API is running"}
+    """Simple health check - confirms the server is running and auto-restores active resume."""
+    chunks = ensure_resume_loaded()
+    return {"status": "ok", "message": "ResumeMatch API is running", "resume_chunks": chunks}
+
 
 
 @app.post("/upload-resume")
@@ -205,7 +252,15 @@ class AnalyzeRequest(BaseModel):
 async def analyze_job(request: AnalyzeRequest):
     """Runs the full tailoring pipeline against a specific job description."""
     try:
+        resume_count = ensure_resume_loaded()
+        if resume_count == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="No resume has been uploaded yet. Please upload a resume before analyzing jobs.",
+            )
+
         extracted = await extract_job_requirements_async(request.job_description)
+
 
         if not extracted.requirements:
             raise HTTPException(status_code=400, detail="Could not extract any requirements from this job description")

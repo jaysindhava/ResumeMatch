@@ -87,7 +87,11 @@ class JobScore(BaseModel):
 def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     a = np.array(vec_a)
     b = np.array(vec_b)
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+    denom = np.linalg.norm(a) * np.linalg.norm(b)
+    if denom == 0:
+        return 0.0
+    return float(np.dot(a, b) / denom)
+
 
 
 def prefilter_jobs_by_similarity(jobs: dict, resume_text: str, top_n: int = 12) -> list[tuple]:

@@ -51,16 +51,24 @@ def tokenize(text: str) -> list[str]:
     return _stemmer.stemWords(words)
 
 
-def build_bm25_index(documents: list[str]) -> BM25Okapi:
+def build_bm25_index(documents: list[str]) -> BM25Okapi | None:
     """BM25 needs documents pre-tokenized into lists of words."""
-    tokenized = [tokenize(doc) for doc in documents]
+    if not documents:
+        return None
+    tokenized = [tokenize(doc) for doc in documents if doc and doc.strip()]
+    if not tokenized or not any(tokenized):
+        return None
     return BM25Okapi(tokenized)
 
 
 def bm25_search(query: str, n_results: int = 5) -> list[dict]:
     """Search resume chunks using pure keyword (BM25) matching."""
     chunks = get_all_resume_chunks()
+    if not chunks.get("documents"):
+        return []
     bm25 = build_bm25_index(chunks["documents"])
+    if bm25 is None:
+        return []
 
     tokenized_query = tokenize(query)
     scores = bm25.get_scores(tokenized_query)
@@ -82,11 +90,17 @@ def bm25_search(query: str, n_results: int = 5) -> list[dict]:
 def vector_search(query: str, n_results: int = 5) -> list[dict]:
     """Search resume chunks using pure semantic (vector) similarity."""
     collection = get_resume_collection()
+    if collection.count() == 0:
+        return []
+
     query_embedding = embed_text(query)
+    actual_k = min(n_results, collection.count())
+    if actual_k <= 0:
+        return []
 
     results = collection.query(
         query_embeddings=[query_embedding],
-        n_results=n_results,
+        n_results=actual_k,
     )
 
     output = []
