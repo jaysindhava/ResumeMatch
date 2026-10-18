@@ -6,7 +6,10 @@ const rawUrl =
   "";
 
 const resolvedBackendUrl =
-  rawUrl && !rawUrl.includes("onrender.com") && !rawUrl.includes("127.0.0.1")
+  rawUrl &&
+  !rawUrl.includes("onrender.com") &&
+  !rawUrl.includes("127.0.0.1") &&
+  !rawUrl.includes("52.66.224.136")
     ? rawUrl
     : AWS_BACKEND_URL;
 
