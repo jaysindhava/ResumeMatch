@@ -1,6 +1,6 @@
 import type { NextConfig } from "next";
 
-const AWS_BACKEND_URL = "http://52.66.224.136:8000";
+const AWS_BACKEND_URL = "http://13.235.133.173:8000";
 
 const rawUrl =
   process.env.BACKEND_URL ||
