@@ -77,8 +77,17 @@ app.add_middleware(
 UPLOAD_DIR = "data/resumes"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-ATS_SERVER_PARAMS = ATSServerParameters(command="python", args=["app/mcp_servers/ats_tracker_server.py"])
-JOB_SEARCH_SERVER_PARAMS = StdioServerParameters(command="python", args=["app/mcp_servers/job_search_server.py"])
+ATS_SERVER_PARAMS = ATSServerParameters(
+    command="python",
+    args=["app/mcp_servers/ats_tracker_server.py"],
+    env=dict(os.environ),
+)
+JOB_SEARCH_SERVER_PARAMS = StdioServerParameters(
+    command="python",
+    args=["app/mcp_servers/job_search_server.py"],
+    env=dict(os.environ),
+)
+
 
 
 @app.get("/")
@@ -135,14 +144,20 @@ async def search_jobs(title: str, location: str = "", results: int = 10):
                     "search_jobs",
                     arguments={"title": title, "location": location, "results": results},
                 )
+                if result.isError:
+                    error_text = " ".join(getattr(block, "text", str(block)) for block in result.content)
+                    print(f"ERROR: search_jobs MCP tool returned error: {error_text}")
+                    raise HTTPException(status_code=500, detail=f"Job search failed: {error_text}")
+
                 jobs = []
                 for block in result.content:
-                    if not block.text or not block.text.strip():
+                    if not getattr(block, "text", None) or not block.text.strip():
                         continue
                     try:
                         jobs.append(json.loads(block.text))
                     except json.JSONDecodeError:
                         continue
+
 
         search_id = None
         async with ats_stdio_client(ATS_SERVER_PARAMS) as (read2, write2):

@@ -26,10 +26,16 @@ def search_jobs(title: str, location: str = "", results: int = 10, country: str 
     Returns:
         A list of job postings, each with title, company, location, url, and description.
     """
+    app_id = os.getenv("ADZUNA_APP_ID") or APP_ID
+    app_key = os.getenv("ADZUNA_APP_KEY") or APP_KEY
+
+    if not app_id or not app_key:
+        raise ValueError(f"Adzuna API credentials missing: app_id={bool(app_id)}, app_key={bool(app_key)}")
+
     url = f"https://api.adzuna.com/v1/api/jobs/{country}/search/1"
     params = {
-        "app_id": APP_ID,
-        "app_key": APP_KEY,
+        "app_id": app_id,
+        "app_key": app_key,
         "results_per_page": results,
         "what": title,
         "where": location,
