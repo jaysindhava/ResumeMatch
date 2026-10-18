@@ -1,10 +1,17 @@
 import type { NextConfig } from "next";
 
-const BACKEND_URL =
+const AWS_BACKEND_URL = "http://52.66.224.136:8000";
+
+const rawUrl =
   process.env.BACKEND_URL ||
   process.env.NEXT_PUBLIC_API_URL ||
   process.env.PUBLIC_API_URL ||
-  "http://52.66.224.136:8000";
+  "";
+
+const BACKEND_URL =
+  rawUrl && !rawUrl.includes("onrender.com") && !rawUrl.includes("127.0.0.1")
+    ? rawUrl
+    : AWS_BACKEND_URL;
 
 const nextConfig: NextConfig = {
   env: {
@@ -19,6 +26,7 @@ const nextConfig: NextConfig = {
     ];
   },
 };
+
 
 
 
