@@ -59,14 +59,15 @@ from app.agents.tailoring_graph import tailoring_app
 
 app = FastAPI(title="ResumeMatch API")
 
-# CORS: always allow localhost for dev; add production Vercel URL via env var
-_cors_origins = ["http://localhost:3000"]
+# CORS: allow localhost and all Vercel domains (*.vercel.app)
+_cors_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
 _frontend_url = os.getenv("FRONTEND_URL", "").strip()
 if _frontend_url:
     _cors_origins.append(_frontend_url)
 
 app.add_middleware(
     CORSMiddleware,
+    allow_origin_regex=r"https://.*\.vercel\.app|http://localhost:.*|http://127\.0\.0\.1:.*",
     allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
