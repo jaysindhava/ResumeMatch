@@ -34,8 +34,12 @@ if not groq_keys:
 if not gemini_keys:
     raise ValueError("No GOOGLE_API_KEY found in .env")
 
-# One ChatGroq instance per key
-groq_instances = [ChatGroq(model="llama-3.3-70b-versatile", temperature=0, api_key=k) for k in groq_keys]
+# ChatGroq instances: primary openai/gpt-oss-120b, then qwen/qwen3.8-27b
+groq_instances = [
+    ChatGroq(model="openai/gpt-oss-120b", temperature=0, api_key=k) for k in groq_keys
+] + [
+    ChatGroq(model="qwen/qwen3.8-27b", temperature=0, api_key=k) for k in groq_keys
+]
 
 # One Gemini instance per key, for both the flash and flash-lite models
 gemini_flash_instances = [ChatGoogleGenerativeAI(model="gemini-flash-latest", temperature=0, google_api_key=k) for k in gemini_keys]
@@ -43,15 +47,12 @@ gemini_flash_lite_instances = [ChatGoogleGenerativeAI(model="gemini-flash-lite-l
 
 print(f"LLM config: {len(groq_keys)} Groq key(s), {len(gemini_keys)} Gemini key(s) loaded.")
 
-# Main chain (used by tailoring.py, the isolated gap-report path):
-# tries every Groq key first (fast provider), then every Gemini flash key,
-# then every Gemini flash-lite key, as a deep fallback chain.
+# Main chain: tries every Groq key/model first, then Gemini flash, then Gemini flash-lite
 llm = groq_instances[0].with_fallbacks(
     groq_instances[1:] + gemini_flash_instances + gemini_flash_lite_instances
 )
 
-# Extraction chain (used for bulk ranking): same rotation, kept as a
-# separate name for clarity in the codebase about which task uses it.
+# Extraction chain: same rotation
 extraction_llm = groq_instances[0].with_fallbacks(
     groq_instances[1:] + gemini_flash_instances + gemini_flash_lite_instances
 )

@@ -135,11 +135,20 @@ JOB_SEARCH_SERVER_PARAMS = StdioServerParameters(
 
 
 
+@app.on_event("startup")
+def on_startup():
+    """Auto-restore latest resume from S3 on container boot."""
+    try:
+        ensure_resume_loaded()
+    except Exception as e:
+        print(f"Warning: Startup resume auto-restore failed: {e}")
+
+
 @app.get("/")
 def health_check():
-    """Simple health check - confirms the server is running and auto-restores active resume."""
-    chunks = ensure_resume_loaded()
-    return {"status": "ok", "message": "ResumeMatch API is running", "resume_chunks": chunks}
+    """Ultra-fast, non-blocking health check for ECS and load balancers."""
+    return {"status": "ok", "message": "ResumeMatch API is running"}
+
 
 
 

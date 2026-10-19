@@ -18,49 +18,64 @@ class TailoringState(TypedDict):
 
 
 def analyze_gap_node(state: TailoringState) -> TailoringState:
-    """Step 1: Run gap analysis against the job requirements.
-    Uses the isolated, per-requirement version for higher accuracy, since
-    this is the single-job path a user directly acts on."""
-    print("  [node: analyze_gap] Running gap analysis (isolated per-requirement)...")
-    report = build_gap_report_isolated(
+    """Step 1: Run gap analysis against the job requirements."""
+    print("  [node: analyze_gap] Running gap analysis...")
+    report = build_gap_report(
         job_description="",
         job_requirements=state["job_requirements"],
     )
     return {**state, "gap_report": report}
 
 
+
+from concurrent.futures import ThreadPoolExecutor
+
+
 def rewrite_node(state: TailoringState) -> TailoringState:
-    """Step 2: For each weak-phrasing item, attempt a rewrite."""
-    print(f"  [node: rewrite] Rewriting {len(state['gap_report'].weak_phrasing)} weak-phrasing bullets...")
-    rewritten = []
-    for item in state["gap_report"].weak_phrasing:
+    """Step 2: For each weak-phrasing item, attempt a rewrite concurrently."""
+    items = state["gap_report"].weak_phrasing[:3]
+    print(f"  [node: rewrite] Rewriting {len(items)} weak-phrasing bullets in parallel...")
+    if not items:
+        return {**state, "rewritten_bullets": []}
+
+    def _do_rewrite(item):
         result = rewrite_bullet(
             original_bullet=item.resume_text,
             requirement=item.requirement,
             suggestion_hint=item.suggestion,
         )
-        rewritten.append({
+        return {
             "chunk_id": item.resume_chunk_id,
             "requirement": item.requirement,
             "original": result.original_text,
             "rewritten": result.rewritten_text,
             "reasoning": result.reasoning,
-        })
+        }
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        rewritten = list(executor.map(_do_rewrite, items))
+
     return {**state, "rewritten_bullets": rewritten}
 
 
 def validate_node(state: TailoringState) -> TailoringState:
-    """Step 3: Run full (keyword + LLM fact-check) validation; split safe vs flagged."""
-    print(f"  [node: validate] Validating {len(state['rewritten_bullets'])} rewrites...")
-    flagged = []
-    safe = []
-    for item in state["rewritten_bullets"]:
+    """Step 3: Run full (keyword + LLM fact-check) validation in parallel; split safe vs flagged."""
+    rewrites = state["rewritten_bullets"]
+    print(f"  [node: validate] Validating {len(rewrites)} rewrites in parallel...")
+    if not rewrites:
+        return {**state, "rewritten_bullets": [], "flagged_for_review": []}
+
+    def _do_validate(item):
         validation = full_validation(item["original"], item["rewritten"])
-        item["validation"] = validation
-        if validation["is_safe"]:
-            safe.append(item)
-        else:
-            flagged.append(item)
+        item_copy = dict(item)
+        item_copy["validation"] = validation
+        return item_copy
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        validated = list(executor.map(_do_validate, rewrites))
+
+    safe = [item for item in validated if item["validation"]["is_safe"]]
+    flagged = [item for item in validated if not item["validation"]["is_safe"]]
     return {**state, "rewritten_bullets": safe, "flagged_for_review": flagged}
 
 

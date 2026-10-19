@@ -1,6 +1,6 @@
 import type { NextConfig } from "next";
 
-const AWS_BACKEND_URL = "http://16.4.45.221:8000";
+const AWS_BACKEND_URL = "http://3.109.220.205:8000";
 
 const rawUrl =
   process.env.BACKEND_URL ||
@@ -13,7 +13,9 @@ const BACKEND_URL =
   !rawUrl.includes("onrender.com") &&
   !rawUrl.includes("127.0.0.1") &&
   !rawUrl.includes("52.66.224.136") &&
-  !rawUrl.includes("13.235.133.173")
+  !rawUrl.includes("13.235.133.173") &&
+  !rawUrl.includes("16.4.45.221") &&
+  !rawUrl.includes("13.232.110.249")
     ? rawUrl
     : AWS_BACKEND_URL;
 
