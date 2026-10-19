@@ -7,7 +7,7 @@ import io
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import shutil
@@ -54,51 +54,27 @@ from app.parsers.resume_parser import (
     chunk_general_text,
 )
 from app.vectorstore.setup import get_resume_collection, embed_and_store
-from app.agents.ranking import extract_job_requirements_async, rank_all_jobs_async, rank_job_list_async
+from app.agents.ranking import (
+    extract_job_requirements_async, rank_all_jobs_async, rank_job_list_async,
+    extract_candidate_experience_from_text, compare_experience, CandidateExperience,
+)
+from app.agents.gap_analysis import get_full_resume_text
 from app.agents.tailoring_graph import tailoring_app
 
+# In-memory session tracking for candidate experience and active resume file
+_session_experience: dict[str, dict] = {}
+_session_resumes: dict[str, str] = {}
 
-def ensure_resume_loaded() -> int:
-    """Check if ChromaDB has resume chunks; if not and S3 is configured,
-    auto-restore the most recently uploaded resume from S3."""
+
+def ensure_resume_loaded(session_id: str = "default") -> int:
+    """Check if ChromaDB has resume chunks for the given session."""
     try:
-        collection = get_resume_collection()
+        collection = get_resume_collection(session_id)
         count = collection.count()
-        if count > 0:
-            return count
-
-        if USE_S3 and _s3_client:
-            response = _s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix="resumes/")
-            contents = response.get("Contents", [])
-            pdf_objects = [obj for obj in contents if obj["Key"].endswith(".pdf") and obj.get("Size", 0) > 100]
-            if pdf_objects:
-                pdf_objects.sort(key=lambda x: x["LastModified"], reverse=True)
-                latest_key = pdf_objects[0]["Key"]
-                filename = os.path.basename(latest_key)
-                local_path = os.path.join(UPLOAD_DIR, filename)
-                print(f"Auto-restoring latest resume from S3: {latest_key} -> {local_path}")
-                _s3_client.download_file(S3_BUCKET, latest_key, local_path)
-
-                text = extract_raw_text(local_path)
-                sections = split_into_sections(text)
-                all_chunks = []
-                all_chunks += chunk_bullets(sections.get("experience", ""), "experience")
-                all_chunks += chunk_bullets(sections.get("projects", ""), "projects")
-                all_chunks += chunk_skills(sections.get("skills", ""))
-                all_chunks += chunk_education(sections.get("education", ""))
-                all_chunks += chunk_certifications(sections.get("certifications", ""))
-                if "summary" in sections:
-                    all_chunks += chunk_general_text(sections["summary"], "summary")
-                if not all_chunks:
-                    all_chunks = chunk_general_text(text, "general")
-
-                embed_and_store(all_chunks, collection)
-                print(f"Successfully auto-restored {len(all_chunks)} chunks for {filename}")
-                return len(all_chunks)
+        return count
     except Exception as e:
-        print(f"Warning: Failed to auto-restore resume from S3: {e}")
-
-    return 0
+        print(f"Warning: Failed to check resume for session {session_id}: {e}")
+        return 0
 
 
 app = FastAPI(title="ResumeMatch API")
@@ -123,12 +99,12 @@ UPLOAD_DIR = "data/resumes"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 ATS_SERVER_PARAMS = ATSServerParameters(
-    command="python",
+    command=sys.executable,
     args=["app/mcp_servers/ats_tracker_server.py"],
     env=dict(os.environ),
 )
 JOB_SEARCH_SERVER_PARAMS = StdioServerParameters(
-    command="python",
+    command=sys.executable,
     args=["app/mcp_servers/job_search_server.py"],
     env=dict(os.environ),
 )
@@ -137,11 +113,8 @@ JOB_SEARCH_SERVER_PARAMS = StdioServerParameters(
 
 @app.on_event("startup")
 def on_startup():
-    """Auto-restore latest resume from S3 on container boot."""
-    try:
-        ensure_resume_loaded()
-    except Exception as e:
-        print(f"Warning: Startup resume auto-restore failed: {e}")
+    """Startup initialization."""
+    print("ResumeMatch API initialized with multi-session isolation.")
 
 
 @app.get("/")
@@ -150,10 +123,26 @@ def health_check():
     return {"status": "ok", "message": "ResumeMatch API is running"}
 
 
+@app.get("/resume-status")
+def get_resume_status(session_id: str = "default"):
+    """Returns whether the specified session currently has an active resume."""
+    collection = get_resume_collection(session_id)
+    count = collection.count()
+    exp = _session_experience.get(session_id)
+    filename = _session_resumes.get(session_id)
+    return {
+        "status": "success",
+        "session_id": session_id,
+        "has_resume": count > 0,
+        "chunks": count,
+        "filename": filename,
+        "candidate_years": exp.get("total_years") if exp else None,
+        "candidate_summary": exp.get("summary") if exp else None,
+    }
 
 
 @app.post("/upload-resume")
-async def upload_resume(file: UploadFile = File(...)):
+async def upload_resume(file: UploadFile = File(...), session_id: str = Form(default="default")):
     """Accepts a PDF resume upload, saves it, and runs it through the full
     Phase 1-2 pipeline: parse -> chunk -> embed -> store in Chroma."""
     if not file.filename.endswith(".pdf"):
@@ -180,16 +169,27 @@ async def upload_resume(file: UploadFile = File(...)):
         if not all_chunks:
             all_chunks = chunk_general_text(text, "general")
 
-        collection = get_resume_collection()
+        collection = get_resume_collection(session_id)
         embed_and_store(all_chunks, collection)
 
-        return {"status": "success", "filename": file.filename, "chunks_created": len(all_chunks)}
+        cand_exp = extract_candidate_experience_from_text(text)
+        _session_experience[session_id] = cand_exp.model_dump()
+        _session_resumes[session_id] = file.filename
+
+        return {
+            "status": "success",
+            "session_id": session_id,
+            "filename": file.filename,
+            "chunks_created": len(all_chunks),
+            "candidate_years": cand_exp.total_years,
+            "candidate_summary": cand_exp.summary,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to process resume: {str(e)}")
 
 
 @app.get("/search-jobs")
-async def search_jobs(title: str, location: str = "", results: int = 10):
+async def search_jobs(title: str, location: str = "", results: int = 10, session_id: str = "default"):
     """Searches for real, live job postings via our MCP job-search server,
     and logs the search to history via the ATS tracker MCP server."""
     try:
@@ -221,7 +221,7 @@ async def search_jobs(title: str, location: str = "", results: int = 10):
                 await session2.initialize()
                 log_result = await session2.call_tool(
                     "log_search",
-                    arguments={"search_title": title, "search_location": location, "results_count": len(jobs)},
+                    arguments={"session_id": session_id, "search_title": title, "search_location": location, "results_count": len(jobs)},
                 )
                 search_id = json.loads(log_result.content[0].text)["id"]
 
@@ -238,6 +238,7 @@ class JobViewRequest(BaseModel):
     job_id: str
     job_title: str
     company: str
+    session_id: str = "default"
 
 
 @app.post("/log-job-view")
@@ -247,7 +248,7 @@ async def log_job_view(request: JobViewRequest):
         async with ats_stdio_client(ATS_SERVER_PARAMS) as (read, write):
             async with ATSClientSession(read, write) as session:
                 await session.initialize()
-                await session.call_tool("log_job_view", arguments=request.model_dump())
+                await session.call_tool("log_job_view", arguments={"search_id": request.search_id, "job_id": request.job_id, "job_title": request.job_title, "company": request.company})
         return {"status": "success"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to log job view: {str(e)}")
@@ -255,37 +256,52 @@ async def log_job_view(request: JobViewRequest):
 
 class AnalyzeRequest(BaseModel):
     job_description: str
+    session_id: str = "default"
 
 
 @app.post("/analyze")
 async def analyze_job(request: AnalyzeRequest):
     """Runs the full tailoring pipeline against a specific job description."""
     try:
-        resume_count = ensure_resume_loaded()
+        resume_count = ensure_resume_loaded(request.session_id)
         if resume_count == 0:
             raise HTTPException(
                 status_code=400,
-                detail="No resume has been uploaded yet. Please upload a resume before analyzing jobs.",
+                detail="No resume has been uploaded yet on this device. Please upload a resume before analyzing jobs.",
             )
 
         extracted = await extract_job_requirements_async(request.job_description)
-
 
         if not extracted.requirements:
             raise HTTPException(status_code=400, detail="Could not extract any requirements from this job description")
 
         initial_state = {
             "job_requirements": extracted.requirements,
+            "session_id": request.session_id,
             "gap_report": None,
             "rewritten_bullets": [],
             "flagged_for_review": [],
         }
         final_state = tailoring_app.invoke(initial_state)
 
+        # Experience analysis & comparison
+        cand_exp_dict = _session_experience.get(request.session_id)
+        if not cand_exp_dict:
+            resume_text = get_full_resume_text(request.session_id)
+            cand_exp_obj = extract_candidate_experience_from_text(resume_text)
+            cand_exp_dict = cand_exp_obj.model_dump()
+            _session_experience[request.session_id] = cand_exp_dict
+        else:
+            cand_exp_obj = CandidateExperience(**cand_exp_dict)
+
+        exp_comparison = compare_experience(extracted.min_years_experience, cand_exp_obj)
+
         return {
             "status": "success",
+            "session_id": request.session_id,
             "extracted_requirements": extracted.requirements,
             "min_years_experience": extracted.min_years_experience,
+            "experience_analysis": exp_comparison,
             "matched_skills": final_state["gap_report"].matched_skills,
             "missing_skills": final_state["gap_report"].missing_skills,
             "safe_rewrites": final_state["rewritten_bullets"],
@@ -311,6 +327,7 @@ class ApplyRequest(BaseModel):
     job_title: str
     company: str
     safe_rewrites: List[dict] = []
+    session_id: str = "default"
 
 
 @app.post("/apply-job")
@@ -329,6 +346,7 @@ async def apply_job(request: ApplyRequest):
                 result = await session.call_tool(
                     "log_application",
                     arguments={
+                        "session_id": request.session_id,
                         "job_id": request.job_id,
                         "job_title": request.job_title,
                         "company": request.company,
@@ -369,6 +387,7 @@ class JobInput(BaseModel):
 class RankJobsRequest(BaseModel):
     jobs: List[JobInput]
     preferred_locations: List[str] = ["Pune", "Nashik", "Mumbai", "Bangalore", "Hyderabad", "Remote"]
+    session_id: str = "default"
 
 
 @app.post("/rank-searched-jobs")
@@ -377,20 +396,20 @@ async def rank_searched_jobs(request: RankJobsRequest):
     of the old frozen batch that /rankings uses."""
     try:
         jobs_dicts = [job.model_dump() for job in request.jobs]
-        ranked = await rank_job_list_async(jobs_dicts, request.preferred_locations)
+        ranked = await rank_job_list_async(jobs_dicts, request.preferred_locations, session_id=request.session_id)
         return {"status": "success", "count": len(ranked), "rankings": [j.model_dump() for j in ranked]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ranking failed: {str(e)}")
 
 
 @app.get("/history")
-async def get_history():
-    """Retrieves the full application history from the ATS tracker MCP server."""
+async def get_history(session_id: str = "default"):
+    """Retrieves the application history for the specified session from the ATS tracker MCP server."""
     try:
         async with ats_stdio_client(ATS_SERVER_PARAMS) as (read, write):
             async with ATSClientSession(read, write) as session:
                 await session.initialize()
-                result = await session.call_tool("get_application_history", arguments={})
+                result = await session.call_tool("get_application_history", arguments={"session_id": session_id})
                 history = [json.loads(block.text) for block in result.content]
         return {"status": "success", "count": len(history), "history": history}
     except Exception as e:
@@ -398,13 +417,13 @@ async def get_history():
 
 
 @app.get("/search-history")
-async def get_search_history():
-    """Retrieves the full search history from the ATS tracker MCP server."""
+async def get_search_history(session_id: str = "default"):
+    """Retrieves the search history for the specified session from the ATS tracker MCP server."""
     try:
         async with ats_stdio_client(ATS_SERVER_PARAMS) as (read, write):
             async with ATSClientSession(read, write) as session:
                 await session.initialize()
-                result = await session.call_tool("get_search_history", arguments={})
+                result = await session.call_tool("get_search_history", arguments={"session_id": session_id})
                 history = [json.loads(block.text) for block in result.content]
         return {"status": "success", "count": len(history), "history": history}
     except Exception as e:
@@ -412,14 +431,14 @@ async def get_search_history():
 
 
 @app.get("/search-history-detailed")
-async def search_history_detailed():
-    """Retrieves search history, with each search's viewed/analyzed jobs
+async def search_history_detailed(session_id: str = "default"):
+    """Retrieves search history for the specified session, with each search's viewed/analyzed jobs
     nested underneath it as a sub-section."""
     try:
         async with ats_stdio_client(ATS_SERVER_PARAMS) as (read, write):
             async with ATSClientSession(read, write) as session:
                 await session.initialize()
-                searches_result = await session.call_tool("get_search_history", arguments={})
+                searches_result = await session.call_tool("get_search_history", arguments={"session_id": session_id})
                 searches = [json.loads(block.text) for block in searches_result.content]
 
                 for search in searches:

@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { API_URL } from "@/lib/api";
+import { getSessionId } from "@/lib/session";
 
 interface Job { job_id: string; title: string; company: string; location: string; description: string; url: string; posted_date: string; }
 interface RankedJob { job_id: string; title: string; company: string; location: string; url: string; final_score: number; skill_overlap: number; seniority_match: number; matched_skills: string[]; missing_skills: string[]; }
@@ -15,6 +16,7 @@ export default function JobsPage() {
   const [error, setError] = useState("");
   const [rankings, setRankings] = useState<RankedJob[]>([]);
   const [rankingsLoading, setRankingsLoading] = useState(false);
+  const [rankingsError, setRankingsError] = useState("");
   const router = useRouter();
 
   useEffect(() => {
@@ -29,7 +31,8 @@ export default function JobsPage() {
   const handleSearch = async () => {
     setLoading(true); setError("");
     try {
-      const params = new URLSearchParams({ title, location, results: "10" });
+      const sessionId = getSessionId();
+      const params = new URLSearchParams({ title, location, results: "10", session_id: sessionId });
       const response = await fetch(`${API_URL}/search-jobs?${params}`);
       const data = await response.json();
       if (response.ok) {
@@ -54,15 +57,23 @@ export default function JobsPage() {
   const handleGetRankings = async () => {
     if (jobs.length === 0) return;
     setRankingsLoading(true);
+    setRankingsError("");
     try {
+      const sessionId = getSessionId();
       const response = await fetch(`${API_URL}/rank-searched-jobs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jobs }),
+        body: JSON.stringify({ jobs, session_id: sessionId }),
       });
       const data = await response.json();
-      if (response.ok) setRankings(data.rankings);
-    } catch {} finally { setRankingsLoading(false); }
+      if (response.ok) {
+        setRankings(data.rankings);
+      } else {
+        setRankingsError(data.detail || "Failed to rank matches. Please ensure a resume is uploaded on this device.");
+      }
+    } catch {
+      setRankingsError("Could not reach backend for ranking.");
+    } finally { setRankingsLoading(false); }
   };
 
   return (
@@ -109,6 +120,7 @@ export default function JobsPage() {
             {rankingsLoading ? "Scoring..." : "Get top matches"}
           </button>
         </div>
+        {rankingsError && <p className="text-sm font-mono mb-4" style={{ color: "var(--flag)" }}>{rankingsError}</p>}
         <div className="space-y-2">
           {rankings.map((job, i) => (
             <div key={job.job_id} className="rounded-lg p-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>

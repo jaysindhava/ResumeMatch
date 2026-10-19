@@ -1,14 +1,25 @@
 "use client";
 
 import { API_URL } from "@/lib/api";
+import { getSessionId } from "@/lib/session";
 import { useState, useEffect } from "react";
 
 export default function DashboardPage() {
   const [resumeStatus, setResumeStatus] = useState<"checking" | "none" | "loaded">("checking");
+  const [resumeInfo, setResumeInfo] = useState<{ filename?: string; candidate_years?: number } | null>(null);
 
   useEffect(() => {
-    fetch(`${API_URL}/history`)
-      .then(() => setResumeStatus("loaded"))
+    const sessionId = getSessionId();
+    fetch(`${API_URL}/resume-status?session_id=${encodeURIComponent(sessionId)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.has_resume) {
+          setResumeStatus("loaded");
+          setResumeInfo({ filename: data.filename, candidate_years: data.candidate_years });
+        } else {
+          setResumeStatus("none");
+        }
+      })
       .catch(() => setResumeStatus("none"));
   }, []);
 
@@ -31,12 +42,14 @@ export default function DashboardPage() {
         <div className="flex items-center gap-3">
           <span className="w-2 h-2 rounded-full" style={{ background: resumeStatus === "loaded" ? "var(--accept)" : "var(--flag)", boxShadow: `0 0 8px ${resumeStatus === "loaded" ? "var(--accept)" : "var(--flag)"}` }} />
           <span className="font-mono text-xs uppercase tracking-wider">
-            {resumeStatus === "checking" && "Checking active resume..."}
-            {resumeStatus === "loaded" && "Resume loaded — most recent upload is active"}
-            {resumeStatus === "none" && "No resume loaded yet"}
+            {resumeStatus === "checking" && "Checking device session..."}
+            {resumeStatus === "loaded" && `Resume active — ${resumeInfo?.candidate_years !== undefined ? `~${resumeInfo.candidate_years} yrs exp detected` : "ready for analysis"}`}
+            {resumeStatus === "none" && "No resume loaded yet on this device"}
           </span>
         </div>
-        <a href="/upload" className="font-mono text-xs" style={{ color: "var(--accent)" }}>Replace →</a>
+        <a href="/upload" className="font-mono text-xs hover:underline" style={{ color: "var(--accent)" }}>
+          {resumeStatus === "loaded" ? "Replace →" : "Upload resume →"}
+        </a>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

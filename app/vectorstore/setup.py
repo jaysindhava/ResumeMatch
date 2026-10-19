@@ -24,11 +24,25 @@ def _get_embedding_model():
         _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
     return _embedding_model
 
-def get_resume_collection():
-    """Single collection for all resume chunks, across all section types."""
+import re
+
+
+def get_resume_collection(session_id: str | None = None):
+    """Collection for resume chunks. When session_id is provided,
+    isolates the collection per session so each device starts clean."""
+    if not session_id or session_id in ("default", "global"):
+        col_name = "resume_chunks"
+    else:
+        clean = re.sub(r"[^a-zA-Z0-9_-]", "_", str(session_id).strip()).strip("_")
+        if not clean:
+            clean = "default"
+        col_name = f"res_{clean}"[:60]
+        if not col_name[-1].isalnum():
+            col_name = col_name[:-1] + "0"
+
     return _client.get_or_create_collection(
-        name="resume_chunks",
-        metadata={"hnsw:space": "cosine"},  # cosine similarity for search
+        name=col_name,
+        metadata={"hnsw:space": "cosine"},
     )
 
 

@@ -14,29 +14,29 @@ from app.agents.llm_config import extraction_llm as gap_llm
 _stemmer = snowball_stemmer("english")
 
 
-def get_all_resume_chunks() -> dict:
+def get_all_resume_chunks(session_id: str | None = None) -> dict:
     """
-    Pull every chunk currently stored in the resume_chunks collection,
+    Pull every chunk currently stored in the session's resume collection,
     along with its text and metadata, so we can build a BM25 index over them.
     """
-    collection = get_resume_collection()
+    collection = get_resume_collection(session_id)
     data = collection.get()
 
     return {
-        "ids": data["ids"],
-        "documents": data["documents"],
-        "metadatas": data["metadatas"],
+        "ids": data.get("ids", []),
+        "documents": data.get("documents", []),
+        "metadatas": data.get("metadatas", []),
     }
 
 
-def get_full_resume_text() -> str:
+def get_full_resume_text(session_id: str | None = None) -> str:
     """
     Concatenates all resume chunks into one block of text, for use in
     prompts that need the whole resume at once rather than per-requirement
     retrieved evidence.
     """
-    chunks = get_all_resume_chunks()
-    return "\n".join(chunks["documents"])
+    chunks = get_all_resume_chunks(session_id)
+    return "\n".join(chunks.get("documents", []))
 
 
 def tokenize(text: str) -> list[str]:
@@ -61,9 +61,9 @@ def build_bm25_index(documents: list[str]) -> BM25Okapi | None:
     return BM25Okapi(tokenized)
 
 
-def bm25_search(query: str, n_results: int = 5) -> list[dict]:
+def bm25_search(query: str, n_results: int = 5, session_id: str | None = None) -> list[dict]:
     """Search resume chunks using pure keyword (BM25) matching."""
-    chunks = get_all_resume_chunks()
+    chunks = get_all_resume_chunks(session_id)
     if not chunks.get("documents"):
         return []
     bm25 = build_bm25_index(chunks["documents"])
@@ -87,9 +87,9 @@ def bm25_search(query: str, n_results: int = 5) -> list[dict]:
     return results
 
 
-def vector_search(query: str, n_results: int = 5) -> list[dict]:
+def vector_search(query: str, n_results: int = 5, session_id: str | None = None) -> list[dict]:
     """Search resume chunks using pure semantic (vector) similarity."""
-    collection = get_resume_collection()
+    collection = get_resume_collection(session_id)
     if collection.count() == 0:
         return []
 
@@ -143,10 +143,10 @@ def reciprocal_rank_fusion(bm25_results: list[dict], vector_results: list[dict],
     return fused
 
 
-def hybrid_search(query: str, n_results: int = 5) -> list[dict]:
+def hybrid_search(query: str, n_results: int = 5, session_id: str | None = None) -> list[dict]:
     """The main retrieval function: fuses BM25 + vector search results."""
-    bm25_results = bm25_search(query, n_results=10)
-    vector_results = vector_search(query, n_results=10)
+    bm25_results = bm25_search(query, n_results=10, session_id=session_id)
+    vector_results = vector_search(query, n_results=10, session_id=session_id)
     fused = reciprocal_rank_fusion(bm25_results, vector_results)
     return fused[:n_results]
 
@@ -216,12 +216,12 @@ CRITICAL RULES:
 """
 
 
-def _build_evidence_text(job_requirements: list[str]) -> str:
+def _build_evidence_text(job_requirements: list[str], session_id: str | None = None) -> str:
     """Shared helper: retrieves evidence per requirement and formats it into
     the prompt text used by both the sync and async gap report functions."""
     evidence_per_requirement = {}
     for req in job_requirements:
-        candidates = hybrid_search(req, n_results=3)
+        candidates = hybrid_search(req, n_results=3, session_id=session_id)
         evidence_per_requirement[req] = candidates
 
     evidence_text = ""
@@ -233,26 +233,23 @@ def _build_evidence_text(job_requirements: list[str]) -> str:
     return evidence_text
 
 
-def build_gap_report(job_description: str, job_requirements: list[str]) -> GapReport:
+def build_gap_report(job_description: str, job_requirements: list[str], session_id: str | None = None) -> GapReport:
     """
     For each requirement, retrieve candidate resume chunks via hybrid search,
     then let the LLM judge whether they constitute real evidence, weak/partial
     evidence, or no evidence at all - rather than trusting a raw score cutoff.
     """
-    evidence_text = _build_evidence_text(job_requirements)
+    evidence_text = _build_evidence_text(job_requirements, session_id=session_id)
     structured_llm = gap_llm.with_structured_output(GapReport)
     prompt = GAP_REPORT_PROMPT_TEMPLATE.format(evidence_text=evidence_text)
     result = structured_llm.invoke(prompt)
     return enforce_category_exclusivity(result)
 
 
-async def build_gap_report_async(job_description: str, job_requirements: list[str]) -> GapReport:
+async def build_gap_report_async(job_description: str, job_requirements: list[str], session_id: str | None = None) -> GapReport:
     """Async version of build_gap_report - used for BULK ranking (Phase 7),
-    where all requirements are judged together in ONE call for efficiency.
-    Testing showed this batching can occasionally misclassify individual
-    items (see build_gap_report_isolated for the higher-accuracy alternative
-    used in single-job tailoring, Phase 6)."""
-    evidence_text = _build_evidence_text(job_requirements)
+    where all requirements are judged together in ONE call for efficiency."""
+    evidence_text = _build_evidence_text(job_requirements, session_id=session_id)
     structured_llm = gap_llm.with_structured_output(GapReport)
     prompt = GAP_REPORT_PROMPT_TEMPLATE.format(evidence_text=evidence_text)
     result = await structured_llm.ainvoke(prompt)

@@ -19,15 +19,23 @@ def get_connection():
 def init_db():
     conn = get_connection()
     conn.execute("""CREATE TABLE IF NOT EXISTS applications (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, job_title TEXT, company TEXT,
+        id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT DEFAULT 'default', job_id TEXT NOT NULL, job_title TEXT, company TEXT,
         tailored_resume_summary TEXT, status TEXT DEFAULT 'tailored', created_at TEXT, updated_at TEXT)""")
     conn.execute("""CREATE TABLE IF NOT EXISTS search_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, search_title TEXT, search_location TEXT,
+        id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT DEFAULT 'default', search_title TEXT, search_location TEXT,
         results_count INTEGER, created_at TEXT)""")
     conn.execute("""CREATE TABLE IF NOT EXISTS job_views (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, search_id INTEGER, job_title TEXT, company TEXT,
+        id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT DEFAULT 'default', search_id INTEGER, job_title TEXT, company TEXT,
         job_id TEXT, created_at TEXT,
         UNIQUE(search_id, job_id))""")
+
+    # Migrate any existing tables without session_id
+    for table in ["applications", "search_history", "job_views"]:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN session_id TEXT DEFAULT 'default'")
+        except Exception:
+            pass
+
     conn.commit()
     conn.close()
 
@@ -36,26 +44,17 @@ init_db()  # runs once when the server starts
 
 
 @mcp.tool()
-def log_application(job_id: str, job_title: str, company: str, tailored_resume_summary: str) -> dict:
+def log_application(job_id: str, job_title: str, company: str, tailored_resume_summary: str, session_id: str = "default") -> dict:
     """
     Log that a resume was tailored for a specific job. Creates a new
     application record with status 'tailored'.
-
-    Args:
-        job_id: The Adzuna job ID this tailoring was done for
-        job_title: The job's title
-        company: The hiring company
-        tailored_resume_summary: A short summary of what was tailored (e.g. which bullets changed)
-
-    Returns:
-        The newly created application record, including its id and timestamps.
     """
     conn = get_connection()
     now = datetime.utcnow().isoformat()
     cursor = conn.execute(
-        """INSERT INTO applications (job_id, job_title, company, tailored_resume_summary, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 'tailored', ?, ?)""",
-        (job_id, job_title, company, tailored_resume_summary, now, now),
+        """INSERT INTO applications (session_id, job_id, job_title, company, tailored_resume_summary, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'tailored', ?, ?)""",
+        (session_id, job_id, job_title, company, tailored_resume_summary, now, now),
     )
     conn.commit()
     new_id = cursor.lastrowid
@@ -63,6 +62,7 @@ def log_application(job_id: str, job_title: str, company: str, tailored_resume_s
 
     return {
         "id": new_id,
+        "session_id": session_id,
         "job_id": job_id,
         "job_title": job_title,
         "company": company,
@@ -72,15 +72,15 @@ def log_application(job_id: str, job_title: str, company: str, tailored_resume_s
 
 
 @mcp.tool()
-def get_application_history() -> list[dict]:
+def get_application_history(session_id: str = "default") -> list[dict]:
     """
-    Retrieve all past application records, most recent first.
-
-    Returns:
-        A list of application records with id, job details, status, and timestamps.
+    Retrieve past application records for this session, most recent first.
     """
     conn = get_connection()
-    rows = conn.execute("SELECT * FROM applications ORDER BY created_at DESC").fetchall()
+    if session_id == "all":
+        rows = conn.execute("SELECT * FROM applications ORDER BY created_at DESC").fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM applications WHERE session_id = ? ORDER BY created_at DESC", (session_id,)).fetchall()
     conn.close()
 
     return [dict(row) for row in rows]
@@ -113,36 +113,31 @@ def update_status(application_id: int, new_status: str) -> dict:
     return dict(row)
 
 @mcp.tool()
-def log_search(search_title: str, search_location: str, results_count: int) -> dict:
+def log_search(search_title: str, search_location: str, results_count: int, session_id: str = "default") -> dict:
     """
     Logs that a job search happened, for the user's search history.
-
-    Args:
-        search_title: The job title/keywords searched for
-        search_location: The location searched in
-        results_count: How many results were returned
-
-    Returns:
-        The newly created search history record.
     """
     conn = get_connection()
     now = datetime.utcnow().isoformat()
     cursor = conn.execute(
-        "INSERT INTO search_history (search_title, search_location, results_count, created_at) VALUES (?, ?, ?, ?)",
-        (search_title, search_location, results_count, now),
+        "INSERT INTO search_history (session_id, search_title, search_location, results_count, created_at) VALUES (?, ?, ?, ?, ?)",
+        (session_id, search_title, search_location, results_count, now),
     )
     conn.commit()
     new_id = cursor.lastrowid
     conn.close()
 
-    return {"id": new_id, "search_title": search_title, "search_location": search_location, "results_count": results_count, "created_at": now}
+    return {"id": new_id, "session_id": session_id, "search_title": search_title, "search_location": search_location, "results_count": results_count, "created_at": now}
 
 
 @mcp.tool()
-def get_search_history() -> list[dict]:
-    """Retrieve all past searches, most recent first."""
+def get_search_history(session_id: str = "default") -> list[dict]:
+    """Retrieve past searches for this session, most recent first."""
     conn = get_connection()
-    rows = conn.execute("SELECT * FROM search_history ORDER BY created_at DESC").fetchall()
+    if session_id == "all":
+        rows = conn.execute("SELECT * FROM search_history ORDER BY created_at DESC").fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM search_history WHERE session_id = ? ORDER BY created_at DESC", (session_id,)).fetchall()
     conn.close()
     return [dict(row) for row in rows]
 

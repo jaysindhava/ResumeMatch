@@ -2,13 +2,25 @@
 
 import { useState, useEffect } from "react";
 import { API_URL } from "@/lib/api";
+import { getSessionId } from "@/lib/session";
 
 interface Job { job_id: string; title: string; company: string; location: string; description: string; }
 interface Rewrite { chunk_id: string; requirement: string; original: string; rewritten: string; }
+interface ExperienceAnalysis {
+  job_years_required: number;
+  candidate_years: number;
+  status: string;
+  is_match: boolean;
+  candidate_summary: string;
+  comparison_text: string;
+}
 interface AnalysisResult {
-  matched_skills: string[]; missing_skills: string[];
+  matched_skills: string[];
+  missing_skills: string[];
   safe_rewrites: Rewrite[];
   flagged_for_review: { chunk_id: string; requirement: string; original: string; rewritten: string; reason: string[] }[];
+  min_years_experience?: number;
+  experience_analysis?: ExperienceAnalysis;
 }
 
 export default function JobDetailPage() {
@@ -25,10 +37,11 @@ export default function JobDetailPage() {
       const j = JSON.parse(stored);
       setJob(j);
       if (searchId) {
+        const sessionId = getSessionId();
         fetch(`${API_URL}/log-job-view`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ search_id: parseInt(searchId), job_id: j.job_id, job_title: j.title, company: j.company }),
+          body: JSON.stringify({ search_id: parseInt(searchId), job_id: j.job_id, job_title: j.title, company: j.company, session_id: sessionId }),
         }).catch(() => {});
       }
     }
@@ -38,12 +51,17 @@ export default function JobDetailPage() {
     if (!job) return;
     setLoading(true); setError("");
     try {
+      const sessionId = getSessionId();
       const response = await fetch(`${API_URL}/analyze`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ job_description: job.description }),
+        body: JSON.stringify({ job_description: job.description, session_id: sessionId }),
       });
       const data = await response.json();
-      if (response.ok) setAnalysis(data); else setError(data.detail || "Analysis failed");
+      if (response.ok) {
+        setAnalysis(data);
+      } else {
+        setError(data.detail || "Analysis failed");
+      }
     } catch { setError("Could not reach the backend."); }
     finally { setLoading(false); }
   };
@@ -51,11 +69,13 @@ export default function JobDetailPage() {
   const handleApply = async () => {
     if (!job) return;
     try {
+      const sessionId = getSessionId();
       await fetch(`${API_URL}/apply-job`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           job_id: job.job_id, job_title: job.title, company: job.company,
           safe_rewrites: analysis?.safe_rewrites || [],
+          session_id: sessionId,
         }),
       });
       setApplied(true);
@@ -70,6 +90,14 @@ export default function JobDetailPage() {
     lines.push(`Resume changes for: ${job.title} at ${job.company}`);
     lines.push(`Generated: ${new Date().toLocaleString()}`);
     lines.push("");
+    if (analysis.experience_analysis) {
+      lines.push("=== YEARS OF EXPERIENCE COMPARISON ===");
+      lines.push(`Job Requirement:    ${analysis.experience_analysis.job_years_required > 0 ? `${analysis.experience_analysis.job_years_required}+ years` : "Entry-level / Not specified"}`);
+      lines.push(`Resume Detected:    ~${analysis.experience_analysis.candidate_years} years (${analysis.experience_analysis.candidate_summary})`);
+      lines.push(`Match Status:       ${analysis.experience_analysis.status}`);
+      lines.push(`Assessment:         ${analysis.experience_analysis.comparison_text}`);
+      lines.push("");
+    }
     lines.push("=== MATCHED SKILLS ===");
     lines.push(analysis.matched_skills.join(", ") || "none");
     lines.push("");
@@ -100,7 +128,7 @@ export default function JobDetailPage() {
 
   return (
     <div className="space-y-8">
-      <a href="/jobs" className="font-mono text-xs" style={{ color: "var(--muted)" }}>← Back to search results</a>
+      <a href="/jobs" className="font-mono text-xs hover:underline" style={{ color: "var(--muted)" }}>← Back to search results</a>
 
       <div>
         <p className="font-mono text-xs uppercase tracking-widest mb-2" style={{ color: "var(--accent)" }}>Step 03 — redlined</p>
@@ -113,10 +141,83 @@ export default function JobDetailPage() {
         style={{ background: "var(--accept)", color: "#062412", ["--glow-color" as string]: "var(--accept)" }}>
         {loading ? "Reading against resume..." : "Run gap analysis"}
       </button>
-      {error && <p className="text-sm font-mono" style={{ color: "var(--flag)" }}>{error}</p>}
+      {error && (
+        <div className="p-3 rounded-md border" style={{ borderColor: "rgba(255,92,92,0.3)", background: "rgba(255,92,92,0.06)" }}>
+          <p className="text-sm font-mono" style={{ color: "var(--flag)" }}>✕ {error}</p>
+          {error.includes("upload") && (
+            <a href="/upload" className="font-mono text-xs mt-2 inline-block underline" style={{ color: "var(--accent)" }}>
+              Go to Upload Resume →
+            </a>
+          )}
+        </div>
+      )}
 
       {analysis && (
         <div className="space-y-10">
+          {analysis.experience_analysis && (
+            <div className="rounded-lg p-6" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+              <div className="flex items-center justify-between mb-4">
+                <span className="font-mono text-xs uppercase tracking-widest" style={{ color: "var(--accent)" }}>
+                  Years of Experience Comparison
+                </span>
+                <span
+                  className="font-mono text-xs uppercase px-2.5 py-1 rounded font-semibold tracking-wider flex items-center gap-1.5"
+                  style={{
+                    background: analysis.experience_analysis.is_match ? "rgba(57,255,136,0.12)" : "rgba(255,92,92,0.12)",
+                    color: analysis.experience_analysis.is_match ? "var(--accept)" : "var(--flag)",
+                    border: `1px solid ${analysis.experience_analysis.is_match ? "rgba(57,255,136,0.3)" : "rgba(255,92,92,0.3)"}`,
+                  }}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: analysis.experience_analysis.is_match ? "var(--accept)" : "var(--flag)" }} />
+                  {analysis.experience_analysis.status}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                <div className="p-3 rounded-md" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
+                  <p className="font-mono text-[10px] uppercase tracking-wider" style={{ color: "var(--muted)" }}>Job Requirement</p>
+                  <p className="font-display text-xl font-bold mt-1">
+                    {analysis.experience_analysis.job_years_required > 0
+                      ? `${analysis.experience_analysis.job_years_required}+ Years`
+                      : "Fresher / Entry-Level"}
+                  </p>
+                  <p className="font-mono text-xs mt-1" style={{ color: "var(--muted)" }}>
+                    {analysis.experience_analysis.job_years_required > 0 ? "Minimum required" : "No min yrs specified"}
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-md" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
+                  <p className="font-mono text-[10px] uppercase tracking-wider" style={{ color: "var(--muted)" }}>Resume Experience</p>
+                  <p className="font-display text-xl font-bold mt-1" style={{ color: "var(--accent)" }}>
+                    ~{analysis.experience_analysis.candidate_years} Years
+                  </p>
+                  <p className="font-mono text-xs mt-1 truncate" style={{ color: "var(--muted)" }} title={analysis.experience_analysis.candidate_summary}>
+                    {analysis.experience_analysis.candidate_summary || "Calculated from resume"}
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-md" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
+                  <p className="font-mono text-[10px] uppercase tracking-wider" style={{ color: "var(--muted)" }}>Experience Delta</p>
+                  <p className="font-display text-xl font-bold mt-1" style={{ color: analysis.experience_analysis.is_match ? "var(--accept)" : "var(--flag)" }}>
+                    {analysis.experience_analysis.job_years_required <= 0
+                      ? "✓ Qualified"
+                      : analysis.experience_analysis.candidate_years >= analysis.experience_analysis.job_years_required
+                        ? `+${(analysis.experience_analysis.candidate_years - analysis.experience_analysis.job_years_required).toFixed(1)} yr surplus`
+                        : `-${(analysis.experience_analysis.job_years_required - analysis.experience_analysis.candidate_years).toFixed(1)} yr gap`}
+                  </p>
+                  <p className="font-mono text-xs mt-1" style={{ color: "var(--muted)" }}>
+                    {analysis.experience_analysis.is_match ? "Meets or exceeds criteria" : "Needs project highlight"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-md text-xs leading-relaxed" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)", color: "var(--text)" }}>
+                <p className="font-mono text-[10px] uppercase tracking-wider mb-1" style={{ color: "var(--muted)" }}>Assessment & Strategy</p>
+                <p>{analysis.experience_analysis.comparison_text}</p>
+              </div>
+            </div>
+          )}
+
           <div className="rounded-lg p-6" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
             <p className="font-mono text-xs uppercase tracking-widest mb-4" style={{ color: "var(--muted)" }}>Margin notes</p>
             <div className="flex flex-wrap gap-x-1 gap-y-3 leading-loose">

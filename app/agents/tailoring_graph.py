@@ -10,8 +10,9 @@ from app.agents.gap_analysis import build_gap_report,build_gap_report_isolated, 
 from app.agents.tailoring import rewrite_bullet, full_validation
 
 
-class TailoringState(TypedDict):
+class TailoringState(TypedDict, total=False):
     job_requirements: list[str]
+    session_id: str
     gap_report: GapReport
     rewritten_bullets: list[dict]
     flagged_for_review: list[dict]
@@ -23,6 +24,7 @@ def analyze_gap_node(state: TailoringState) -> TailoringState:
     report = build_gap_report(
         job_description="",
         job_requirements=state["job_requirements"],
+        session_id=state.get("session_id"),
     )
     return {**state, "gap_report": report}
 

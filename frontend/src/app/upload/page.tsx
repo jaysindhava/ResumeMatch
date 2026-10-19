@@ -1,6 +1,7 @@
 "use client";
 
 import { API_URL } from "@/lib/api";
+import { getSessionId } from "@/lib/session";
 import { useState } from "react";
 
 export default function UploadPage() {
@@ -13,12 +14,14 @@ export default function UploadPage() {
     setStatus("uploading");
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("session_id", getSessionId());
     try {
       const response = await fetch(`${API_URL}/upload-resume`, { method: "POST", body: formData });
       const data = await response.json();
       if (response.ok) {
         setStatus("success");
-        setMessage(`${data.chunks_created} chunks parsed and embedded.`);
+        const expStr = data.candidate_years !== undefined ? ` (detected ~${data.candidate_years} yrs exp)` : "";
+        setMessage(`${data.chunks_created} chunks parsed and indexed for this device${expStr}.`);
       } else {
         setStatus("error");
         setMessage(data.detail || "Upload failed");

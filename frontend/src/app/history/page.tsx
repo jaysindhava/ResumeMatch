@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { API_URL } from "@/lib/api";
+import { getSessionId } from "@/lib/session";
 
 interface Application { id: number; job_title: string; company: string; tailored_resume_summary: string; status: string; created_at: string; }
 interface ViewedJob { id: number; job_id: string; job_title: string; company: string; created_at: string; }
@@ -13,10 +14,14 @@ export default function HistoryPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const sessionId = getSessionId();
     Promise.all([
-      fetch(`${API_URL}/history`).then((r) => r.json()),
-      fetch(`${API_URL}/search-history-detailed`).then((r) => r.json()),
-    ]).then(([a, s]) => { setApplications(a.history); setSearches(s.history); })
+      fetch(`${API_URL}/history?session_id=${encodeURIComponent(sessionId)}`).then((r) => r.json()),
+      fetch(`${API_URL}/search-history-detailed?session_id=${encodeURIComponent(sessionId)}`).then((r) => r.json()),
+    ]).then(([a, s]) => {
+      setApplications(a?.history || []);
+      setSearches(s?.history || []);
+    })
       .catch(() => {}).finally(() => setLoading(false));
   }, []);
 

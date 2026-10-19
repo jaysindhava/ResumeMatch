@@ -66,7 +66,63 @@ def get_all_jobs() -> dict:
     return jobs
 
 
-CANDIDATE_YEARS_EXPERIENCE = 0.5  # ~6 months combined internship experience
+class CandidateExperience(BaseModel):
+    total_years: float = Field(description="Estimated total professional/internship experience in years (e.g. 0.5 for 6 months, 1.0, 2.5). If pure fresher or no experience, return 0.0.")
+    summary: str = Field(description="Concise 1-2 sentence summary of candidate experience and titles.")
+
+
+def extract_candidate_experience_from_text(resume_text: str) -> CandidateExperience:
+    """Extract candidate's total years of experience from resume text."""
+    if not resume_text or len(resume_text.strip()) < 20:
+        return CandidateExperience(total_years=0.0, summary="No prior experience listed (fresher/entry-level)")
+    try:
+        structured_llm = extraction_llm.with_structured_output(CandidateExperience)
+        prompt = f"""Analyze the candidate's resume below and extract their total years of professional/internship experience.
+
+Resume text:
+\"\"\"{resume_text[:4000]}\"\"\"
+
+Calculate:
+1. total_years: Total duration of work/internship experience as a float (e.g. 0.5 for 6 months, 1.2, 2.0). If entry-level/fresher with no work history, use 0.0.
+2. summary: A concise 1-2 sentence summary of their roles and experience level.
+"""
+        return structured_llm.invoke(prompt)
+    except Exception as e:
+        print(f"Experience extraction error: {e}")
+        return CandidateExperience(total_years=0.0, summary="Entry level / Fresher")
+
+
+def compare_experience(job_min_years: int, candidate_exp: CandidateExperience) -> dict:
+    cand_years = candidate_exp.total_years
+    cand_summary = candidate_exp.summary
+
+    if job_min_years <= 0:
+        status = "Fresher Friendly"
+        is_match = True
+        explanation = f"This position is open to entry-level candidates or does not specify minimum years. Your background ({cand_summary}) makes you a strong candidate."
+    elif cand_years >= job_min_years:
+        status = "Meets Requirement"
+        is_match = True
+        diff = round(cand_years - job_min_years, 1)
+        extra = f" (+{diff} yr surplus)" if diff > 0 else ""
+        explanation = f"You meet the experience threshold for this role. The job requires {job_min_years} year(s), and your resume reflects ~{cand_years:.1f} year(s){extra} ({cand_summary})."
+    else:
+        status = "Experience Gap"
+        is_match = False
+        gap = round(job_min_years - cand_years, 1)
+        explanation = f"The job lists a requirement of {job_min_years}+ years of experience, while your resume shows ~{cand_years:.1f} year(s) ({cand_summary}). Focus on demonstrating production impact and project complexity to bridge the {gap}-year gap."
+
+    return {
+        "job_years_required": job_min_years,
+        "candidate_years": cand_years,
+        "status": status,
+        "is_match": is_match,
+        "candidate_summary": cand_summary,
+        "comparison_text": explanation,
+    }
+
+
+CANDIDATE_YEARS_EXPERIENCE = 0.5  # fallback default
 
 
 class JobScore(BaseModel):
@@ -117,11 +173,11 @@ def prefilter_jobs_by_similarity(jobs: dict, resume_text: str, top_n: int = 12) 
     return scored[:top_n]
 
 
-async def score_skill_overlap_async(requirements: list[str]) -> tuple[float, list[str], list[str]]:
+async def score_skill_overlap_async(requirements: list[str], session_id: str | None = None) -> tuple[float, list[str], list[str]]:
     if not requirements:
         return 0.0, [], []
 
-    report = await build_gap_report_async(job_description="", job_requirements=requirements)
+    report = await build_gap_report_async(job_description="", job_requirements=requirements, session_id=session_id)
     matched = report.matched_skills
     missing = report.missing_skills
     total = len(matched) + len(missing)
@@ -130,12 +186,12 @@ async def score_skill_overlap_async(requirements: list[str]) -> tuple[float, lis
     return overlap, matched, missing
 
 
-def score_seniority_match(min_years_required: int) -> float:
+def score_seniority_match(min_years_required: int, candidate_years: float = CANDIDATE_YEARS_EXPERIENCE) -> float:
     if min_years_required <= 0:
         return 1.0
-    if CANDIDATE_YEARS_EXPERIENCE >= min_years_required:
+    if candidate_years >= min_years_required:
         return 1.0
-    return round(CANDIDATE_YEARS_EXPERIENCE / min_years_required, 3)
+    return round(candidate_years / min_years_required, 3)
 
 
 def score_location_match(job_location: str, preferred_locations: list[str]) -> float:
@@ -148,7 +204,7 @@ def score_location_match(job_location: str, preferred_locations: list[str]) -> f
     return 0.3
 
 
-async def score_one_job(job_id: str, job: dict, prefilter_score: float, preferred_locations: list[str], semaphore: asyncio.Semaphore):
+async def score_one_job(job_id: str, job: dict, prefilter_score: float, preferred_locations: list[str], semaphore: asyncio.Semaphore, session_id: str | None = None, candidate_years: float = CANDIDATE_YEARS_EXPERIENCE):
     """Score a single job using the validated two-step pipeline (extraction,
     then hybrid-retrieval-grounded gap analysis). Only called on jobs that
     already passed the cheap embedding pre-filter."""
@@ -160,9 +216,9 @@ async def score_one_job(job_id: str, job: dict, prefilter_score: float, preferre
             print(f"  ⚠️  Skipping {job['title']} @ {job['company']} - no requirements could be extracted (likely truncated description)")
             return None
 
-        skill_overlap, matched, missing = await score_skill_overlap_async(extracted.requirements)
+        skill_overlap, matched, missing = await score_skill_overlap_async(extracted.requirements, session_id=session_id)
 
-        seniority = score_seniority_match(extracted.min_years_experience)
+        seniority = score_seniority_match(extracted.min_years_experience, candidate_years=candidate_years)
         location = score_location_match(job["location"], preferred_locations)
         final_score = (0.5 * skill_overlap) + (0.3 * seniority) + (0.2 * location)
 
@@ -226,20 +282,26 @@ async def rank_all_jobs_async(preferred_locations: list[str], top_n_prefilter: i
     return scored_jobs
 
 
-async def rank_job_list_async(jobs_list: list[dict], preferred_locations: list[str], max_concurrent: int = 3) -> list[JobScore]:
+async def rank_job_list_async(jobs_list: list[dict], preferred_locations: list[str], max_concurrent: int = 3, session_id: str | None = None, candidate_years: float | None = None) -> list[JobScore]:
     """
     Same two-stage scoring as rank_all_jobs_async, but operates on a
     caller-provided list of jobs (e.g. fresh search results) instead of
     pulling from the old, frozen Phase 4 ingested batch in Chroma.
     """
     jobs = {job["job_id"]: job for job in jobs_list}
-    resume_text = get_full_resume_text()
+    resume_text = get_full_resume_text(session_id=session_id)
+    if not resume_text:
+        return []
+
+    if candidate_years is None:
+        cand_exp = extract_candidate_experience_from_text(resume_text)
+        candidate_years = cand_exp.total_years
 
     top_candidates = prefilter_jobs_by_similarity(jobs, resume_text, top_n=len(jobs))
 
     semaphore = asyncio.Semaphore(max_concurrent)
     tasks = [
-        score_one_job(job_id, job, prefilter_score, preferred_locations, semaphore)
+        score_one_job(job_id, job, prefilter_score, preferred_locations, semaphore, session_id=session_id, candidate_years=candidate_years)
         for prefilter_score, job_id, job in top_candidates
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
